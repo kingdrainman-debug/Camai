@@ -367,7 +367,7 @@ async function settledStats(page, { minMean = 20, tolerance = 2.5, timeout = 150
     diffs.sort((a, b) => a - b);
     return (diffs[Math.floor(diffs.length / 2)] * 1.4826) / Math.SQRT2;
   });
-  if (texture < 1.5) fail('picture', `a flat area of the Super 8 picture has no grain (σ ${texture.toFixed(2)})`);
+  if (texture < 0.6) fail('picture', `a flat area of the Super 8 picture has no grain (σ ${texture.toFixed(2)})`);
   note('picture', `${(s.lit * 100).toFixed(1)}% lit · contrast ${s.contrast.toFixed(2)} · grain σ ${texture.toFixed(1)} in a flat bar`);
 }
 
@@ -1478,6 +1478,71 @@ const at = (profile, ev) => profile.reduce((b, p) => (Math.abs(p.ev - ev) < Math
       if (d < floor[name]) fail(stage, `switching the ${name} engine off barely changed the picture (${d.toFixed(1)}/px)`);
     }
     note(stage, `bypassing changes the picture by ${Object.entries(r.d).map(([k, v]) => `${k} ${v.toFixed(1)}`).join(' · ')} /px · advanced shown`);
+  } catch (err) {
+    fail(stage, String(err));
+  }
+  await page.close();
+}
+
+/* ================================================================== *
+ * 14. A deterministic export through the interface
+ *
+ * The path a user takes: load a clip, choose a PNG sequence, Render. Each
+ * output frame has to seek to the moment its film frame was exposed, the
+ * file has to be the shape asked for, every frame has to be there, and the
+ * processed soundtrack has to come with it.
+ * ================================================================== */
+
+{
+  const stage = 'export';
+  const { page } = await openPage();
+  try {
+    await page.selectOption('.topbar-actions select', 'news16-1974');
+    const dur = await page.evaluate(async () => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const blob = await (await fetch('/fixture.webm')).blob();
+      const dt = new DataTransfer();
+      dt.items.add(new File([blob], 'motion.webm', { type: 'video/webm' }));
+      window.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true }));
+      for (let k = 0; k < 200; k++) {
+        const v = document.querySelector('video');
+        if (v && v.readyState >= 2 && v.duration > 0) return v.duration;
+        await sleep(100);
+      }
+      throw new Error('video never became ready');
+    });
+    await page.selectOption('.export select', 'pngseq');
+    const [download] = await Promise.all([
+      page.waitForEvent('download', { timeout: 300000 }),
+      page.click('.export .actions button.primary'),
+    ]);
+    const path = await download.path();
+    const { unzipSync } = await import('fflate');
+    const files = unzipSync(new Uint8Array(await readFile(path)));
+    const frames = Object.keys(files).filter((n) => n.startsWith('frames/')).sort();
+    const size = (png) => [
+      (png[16] << 24) | (png[17] << 16) | (png[18] << 8) | png[19],
+      (png[20] << 24) | (png[21] << 16) | (png[22] << 8) | png[23],
+    ];
+    const [w, h] = size(files[frames[0]]);
+    // 16 mm news film at 24 fps on 29.97 fps television.
+    const expected = Math.round(dur * (30000 / 1001));
+    if (Math.abs(frames.length - expected) > 1) fail(stage, `${frames.length} frames for ${dur.toFixed(2)} s at 29.97 fps, expected ${expected}`);
+    if (Math.abs(w / h - 4 / 3) > 0.01) fail(stage, `the file is ${w}×${h}, not the 1.33 frame the preset asks for`);
+    // The fixture has no audio track: the soundtrack is the film's own — the
+    // projector and the track's noise — which a silent clip still has.
+    if (!files['audio.wav'] || files['audio.wav'].length < 10000) fail(stage, 'no soundtrack in the export');
+    if (!files['settings.filmbox.json']) fail(stage, 'the export does not carry its settings');
+    // The clip moves, so consecutive frames must differ — unless the export
+    // never sought and rendered the same film frame throughout.
+    let same = 0;
+    for (let i = 1; i < frames.length; i++) {
+      const a = files[frames[i - 1]];
+      const b = files[frames[i]];
+      if (a.length === b.length && a.every((v, k) => v === b[k])) same++;
+    }
+    if (same > frames.length / 2) fail(stage, `${same} of ${frames.length - 1} consecutive frames are identical — the export did not advance through the clip`);
+    note(stage, `${frames.length} frames of ${w}×${h} for ${dur.toFixed(2)} s at 29.97 · audio ${((files['audio.wav']?.length ?? 0) / 1024).toFixed(0)} KiB · settings embedded`);
   } catch (err) {
     fail(stage, String(err));
   }

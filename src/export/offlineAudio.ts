@@ -88,34 +88,8 @@ export async function renderProcessedAudio(
   const sampleRate = opts.sampleRate ?? 48000;
 
   // No file: a still image. Run silence through the chain for the requested
-  // length so the export still carries hum, hiss, whine and crackle.
-  if (!file) {
-    const durationSec = Math.max(0.1, opts.duration ?? 0);
-    if (durationSec <= 0) return null;
-    opts.onStage?.('rendering ambience');
-    const ctx = new OfflineAudioContext(2, Math.ceil(durationSec * sampleRate), sampleRate);
-    const silence = ctx.createBufferSource();
-    silence.buffer = ctx.createBuffer(2, Math.ceil(durationSec * sampleRate), sampleRate);
-    const chain = await buildChain(ctx, silence, settings, {
-      seed: opts.seed,
-      withAnalyser: false,
-      gateOnPause: false,
-    });
-    chain.output.connect(ctx.destination);
-    chain.sync(0, true);
-    silence.start(0);
-    const rendered = await renderWithAutomation(
-      ctx,
-      chain,
-      settings,
-      opts.timeline ?? EMPTY_TIMELINE,
-      0,
-      durationSec,
-    );
-    opts.onProgress?.(1);
-    chain.dispose();
-    return rendered;
-  }
+  // length so the export still carries the projector and the track's noise.
+  if (!file) return renderSilent(settings, opts, sampleRate);
 
   const raw = await file.arrayBuffer();
   opts.onStage?.('decoding');
@@ -129,9 +103,11 @@ export async function renderProcessedAudio(
   } catch {
     // Plenty of video files have no audio track at all, and some containers
     // cannot be decoded by decodeAudioData even when they play fine in a
-    // <video>. Neither is an error worth stopping an export for.
+    // <video>. Neither is an error worth stopping an export for — and a
+    // silent clip on a projector is still a projector, so it gets the same
+    // soundtrack a still does rather than none.
     await decodeCtx.close().catch(() => undefined);
-    return null;
+    return renderSilent(settings, opts, sampleRate);
   }
   await decodeCtx.close().catch(() => undefined);
 
@@ -174,6 +150,46 @@ export async function renderProcessedAudio(
   if (future && start + printDelay < decoded.duration) {
     future.start(0, start + printDelay, durationSec);
   }
+  const rendered = await renderWithAutomation(
+    ctx,
+    chain,
+    settings,
+    opts.timeline ?? EMPTY_TIMELINE,
+    start,
+    outSec,
+    speed,
+  );
+  opts.onProgress?.(1);
+  chain.dispose();
+  return rendered;
+}
+
+/**
+ * Silence through the chain: the projector, the hiss of an empty track, the
+ * hum. For stills and for clips with no decodable soundtrack.
+ */
+async function renderSilent(
+  settings: Settings,
+  opts: OfflineAudioOptions,
+  sampleRate: number,
+): Promise<AudioBuffer | null> {
+  const durationSec = Math.max(0.1, opts.duration ?? 0);
+  const speed = playbackRate(rates(settings));
+  const outSec = durationSec / speed;
+  opts.onStage?.('rendering ambience');
+  const frames = Math.ceil(outSec * sampleRate);
+  const ctx = new OfflineAudioContext(2, frames, sampleRate);
+  const silence = ctx.createBufferSource();
+  silence.buffer = ctx.createBuffer(2, frames, sampleRate);
+  const chain = await buildChain(ctx, silence, settings, {
+    seed: opts.seed,
+    withAnalyser: false,
+    gateOnPause: false,
+  });
+  chain.output.connect(ctx.destination);
+  const start = opts.start ?? 0;
+  chain.sync(start, true);
+  silence.start(0);
   const rendered = await renderWithAutomation(
     ctx,
     chain,
