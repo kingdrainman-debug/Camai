@@ -182,8 +182,10 @@ void main() {
   for (int k = 0; k < 8; k++) {
     vec4 sp = u_speck[k];
     if (sp.z <= 0.0) continue;
-    float d = length(wa - vec2(sp.x * u_aspect, sp.y));
-    block = max(block, sp.w * (1.0 - smoothstep(sp.z * 0.55, sp.z, d)));
+    // Grit is not round: its outline wanders.
+    vec2 dv = wa - vec2(sp.x * u_aspect, sp.y);
+    float edge = sp.z * (0.65 + 0.7 * vnoise(dv / sp.z * 1.6 + float(k) * 17.0));
+    block = max(block, sp.w * (1.0 - smoothstep(edge * 0.7, edge, length(dv))));
   }
   T *= 1.0 - 0.94 * block;
 

@@ -1,22 +1,28 @@
 /*
  * Headless smoke test.
  *
- * Type-checking cannot catch a shader that fails to compile or a worklet that
- * fails to register, and those are the two ways this app actually breaks. So
- * the built bundle is loaded in Chromium and driven for real:
+ * Type-checking cannot catch a shader that fails to compile, a worklet that
+ * fails to register, or a parameter that moves its slider and reaches nothing.
+ * So the built bundle is loaded in Chromium and driven for real.
  *
- *   1. every GLSL program links and the app mounts without a fatal screen
- *   2. a test pattern pushed through the pipeline comes out lit, with contrast,
- *      and with visible horizontal line structure — i.e. the beam pass ran
- *   3. a real video clip reaches the tube — this is the one that matters most,
- *      because uploading a <video> through texSubImage2D silently writes
- *      nothing while every API call reports success, which once shipped a build
- *      where stills worked perfectly and video was a black screen
- *   4. the DSP worklet registers both processors, passes audio through the
- *      transport, and generates a non-silent noise bed
- *   5. keyframing works through the real UI — arming a parameter, writing a
- *      second key, and confirming the rendered output actually changes between
- *      them and interpolates in the middle
+ * Two kinds of stage:
+ *
+ *   - The application, through its own interface: it mounts, footage reaches
+ *     the film, keyframes animate, the frame is the shape you asked for, the
+ *     guide and the ⓘ panels work, the engine masters bypass, and all of it
+ *     still works over file:// the way the packaged build loads it.
+ *
+ *   - The film, measured. Film artefacts are measurable, so the physics is
+ *     asserted from pixels rather than trusted: the characteristic curve has a
+ *     toe and a shoulder, reversal clips sooner and harder than negative, grain
+ *     is fixed to the film and scales with the format, gate dirt persists and
+ *     film dirt does not, fading goes magenta, pulldown is 3:2, a splice is
+ *     both a jump and a pop. These use window.__filmbox.renderProbe, which
+ *     drives the real renderers with synthetic sources it controls exactly.
+ *
+ * Every stage that waits for the picture polls for a condition rather than
+ * sleeping a fixed time; a fixed sleep samples an undrawn frame under load and
+ * fails for reasons unrelated to the thing under test.
  *
  *   node scripts/smoke.mjs
  */
@@ -28,7 +34,9 @@ import { existsSync } from 'node:fs';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const root = join(fileURLToPath(new URL('.', import.meta.url)), '..', 'dist');
+const here = fileURLToPath(new URL('.', import.meta.url));
+const root = join(here, '..', 'dist');
+const fixtures = join(here, '..', 'tests', 'fixtures');
 
 const MIME = {
   '.webm': 'video/webm',
@@ -39,8 +47,6 @@ const MIME = {
   '.json': 'application/json',
   '.svg': 'image/svg+xml',
 };
-
-const fixtures = join(fileURLToPath(new URL('.', import.meta.url)), '..', 'tests', 'fixtures');
 
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', 'http://localhost');
@@ -64,14 +70,19 @@ const server = createServer(async (req, res) => {
 const port = await new Promise((resolve) => {
   server.listen(0, '127.0.0.1', () => resolve(server.address().port));
 });
+const base = `http://127.0.0.1:${port}/`;
 
 const failures = [];
-// Use an explicit binary when one is provided or present, otherwise let
-// playwright resolve the browser it installed. Keeps this runnable both in the
-// dev container and on a CI runner.
-const explicitChromium = process.env.CRTBOX_CHROMIUM ?? '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
+const report = [];
+const fail = (stage, msg) => failures.push(`${stage}: ${msg}`);
+const note = (stage, msg) => report.push(`  ${stage.padEnd(10)}${msg}`);
+
+// Use an explicit binary when one is given or present, otherwise let
+// playwright resolve the browser it installed — runnable both in the dev
+// container and on a CI runner.
+const explicit = process.env.FILMBOX_CHROMIUM ?? '/opt/pw-browsers/chromium';
 const browser = await chromium.launch({
-  ...(existsSync(explicitChromium) ? { executablePath: explicitChromium } : {}),
+  ...(existsSync(explicit) ? { executablePath: explicit } : {}),
   args: [
     '--use-gl=angle',
     '--use-angle=swiftshader',
@@ -79,1577 +90,1401 @@ const browser = await chromium.launch({
     '--no-sandbox',
     '--autoplay-policy=no-user-gesture-required',
     // The packaged app loads its bundle over file://, where a module script is
-    // a cross-origin request unless this is set. Electron permits it by default;
-    // Chromium does not, so stage 8 needs it to reproduce the shipped condition.
+    // a cross-origin request unless this is set. Electron permits it by
+    // default; Chromium does not.
     '--allow-file-access-from-files',
   ],
 });
 
-const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
-page.on('pageerror', (err) => failures.push(`pageerror: ${err.message}`));
-page.on('console', (msg) => {
-  const text = msg.text();
-  if (msg.type() === 'error' && !/favicon/.test(text) && !/status of 404/.test(text)) {
-    failures.push(`console: ${text}`);
-  }
-});
-page.on('response', (res) => {
-  if (res.status() >= 400 && !res.url().endsWith('favicon.ico')) {
-    failures.push(`http ${res.status()}: ${res.url()}`);
-  }
-});
+const IGNORED_CONSOLE = [/favicon/, /status of 404/, /Automatic fallback to software WebGL/, /GPU stall due to ReadPixels/];
 
-await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'load' });
-
-/* -------- 1. the app mounted and every shader linked -------- */
-
-if (await page.locator('.fatal').count()) {
-  failures.push(`fatal: ${await page.locator('.fatal p').innerText()}`);
-}
-
-const gl = await page.evaluate(() => {
-  const canvas = document.querySelector('canvas');
-  if (!canvas) return { ok: false, error: 'no canvas in the document' };
-  const ctx = canvas.getContext('webgl2');
-  return ctx
-    ? { ok: true, version: ctx.getParameter(ctx.VERSION) }
-    : { ok: false, error: 'no webgl2 context' };
-});
-if (!gl.ok) failures.push(`gl: ${gl.error}`);
-
-/* -------- 2. drive a test pattern through the whole pipeline -------- */
-
-const picture = await page.evaluate(async () => {
-  const out = { lit: 0, contrast: 0, lineStructure: 0, lineSamples: 0, error: null };
-  try {
-    // Colour bars over a black pedestal with a white block: enough for the
-    // mask, the beam profile and the halation pass to all have something to
-    // bite on.
-    const src = document.createElement('canvas');
-    src.width = 640;
-    src.height = 480;
-    const ctx = src.getContext('2d');
-    const bars = ['#c0c0c0', '#c0c000', '#00c0c0', '#00c000', '#c000c0', '#c00000', '#0000c0'];
-    bars.forEach((c, i) => {
-      ctx.fillStyle = c;
-      ctx.fillRect((i * src.width) / bars.length, 0, src.width / bars.length + 1, 360);
-    });
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0, 360, src.width, 120);
-    ctx.fillStyle = '#fff';
-    ctx.fillRect(40, 385, 160, 70);
-
-    const blob = await new Promise((r) => src.toBlob(r, 'image/png'));
-    const file = new File([blob], 'pattern.png', { type: 'image/png' });
-    const dt = new DataTransfer();
-    dt.items.add(file);
-    window.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true }));
-
-    await new Promise((resolve, reject) => {
-      const t0 = performance.now();
-      const poll = () => {
-        const img = document.querySelector('img');
-        if (img && img.naturalWidth > 0) resolve();
-        else if (performance.now() - t0 > 10000) reject(new Error('image never decoded'));
-        else setTimeout(poll, 60);
-      };
-      poll();
-    });
-    // Several frames, so the persistence and burn-in feedback buffers fill.
-    await new Promise((r) => setTimeout(r, 900));
-
-    const app = document.querySelector('canvas');
-    const probe = document.createElement('canvas');
-    probe.width = app.width;
-    probe.height = app.height;
-    const p = probe.getContext('2d', { willReadFrequently: true });
-    p.drawImage(app, 0, 0);
-    const { data } = p.getImageData(0, 0, probe.width, probe.height);
-
-    let lit = 0;
-    let min = 255;
-    let max = 0;
-    for (let i = 0; i < data.length; i += 4) {
-      const l = (data[i] + data[i + 1] + data[i + 2]) / 3;
-      if (l > 24) lit++;
-      if (l < min) min = l;
-      if (l > max) max = l;
-    }
-    out.lit = lit / (probe.width * probe.height);
-    out.contrast = (max - min) / 255;
-
-    // Scanlines: a vertical run through a *lit* part of the picture must
-    // alternate light and dark. Black areas stay black whatever the beam does,
-    // so they are excluded rather than diluting the measurement.
-    let deltas = 0;
-    let samples = 0;
-    for (let x = 8; x < probe.width - 8; x += 7) {
-      for (let y = 8; y < probe.height - 9; y++) {
-        const a = data[(y * probe.width + x) * 4 + 1];
-        const b = data[((y + 1) * probe.width + x) * 4 + 1];
-        if (a < 40 && b < 40) continue;
-        deltas += Math.abs(a - b);
-        samples++;
-      }
-    }
-    out.lineStructure = samples ? deltas / samples / 255 : 0;
-    out.lineSamples = samples;
-  } catch (err) {
-    out.error = err instanceof Error ? err.message : String(err);
-  }
-  return out;
-});
-
-if (picture.error) failures.push(`picture: ${picture.error}`);
-if (picture.lit < 0.15) {
-  failures.push(`picture: only ${(picture.lit * 100).toFixed(1)}% of the canvas is lit`);
-}
-if (picture.contrast < 0.4) {
-  failures.push(`picture: contrast is only ${picture.contrast.toFixed(2)}`);
-}
-if (picture.lineStructure < 0.01) {
-  failures.push(
-    `picture: no horizontal line structure (${picture.lineStructure.toFixed(4)}) — the beam pass did not run`,
-  );
-}
-
-/* -------- 3. a real video clip reaches the tube -------- */
-
-const videoResult = await page.evaluate(async () => {
-  const out = { presented: 0, lit: 0, error: null };
-  try {
-    const blob = await (await fetch('/fixture.webm')).blob();
-    const dt = new DataTransfer();
-    dt.items.add(new File([blob], 'motion.webm', { type: 'video/webm' }));
-    window.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true }));
-
-    const video = await new Promise((resolve, reject) => {
-      const t0 = performance.now();
-      const poll = () => {
-        const v = document.querySelector('video');
-        if (v && v.readyState >= 2 && v.videoWidth > 0) resolve(v);
-        else if (performance.now() - t0 > 20000) reject(new Error('video never decoded'));
-        else setTimeout(poll, 80);
-      };
-      poll();
-    });
-
-    document.querySelector('.transport .play')?.click();
-    await new Promise((r) => setTimeout(r, 2500));
-
-    // Is the element handing out frames at all?
-    const vp = document.createElement('canvas');
-    vp.width = 48; vp.height = 36;
-    const vg = vp.getContext('2d', { willReadFrequently: true });
-    vg.drawImage(video, 0, 0, 48, 36);
-    const vd = vg.getImageData(0, 0, 48, 36).data;
-    for (let i = 0; i < vd.length; i += 4) {
-      out.presented = Math.max(out.presented, (vd[i] + vd[i + 1] + vd[i + 2]) / 3);
-    }
-
-    // And did those frames make it through the pipeline onto the tube?
-    const app = document.querySelector('canvas');
-    const probe = document.createElement('canvas');
-    probe.width = app.width; probe.height = app.height;
-    const p = probe.getContext('2d', { willReadFrequently: true });
-    p.drawImage(app, 0, 0);
-    const { data } = p.getImageData(0, 0, probe.width, probe.height);
-    let lit = 0;
-    for (let i = 0; i < data.length; i += 4) {
-      if ((data[i] + data[i + 1] + data[i + 2]) / 3 > 24) lit++;
-    }
-    out.lit = lit / (probe.width * probe.height);
-  } catch (err) {
-    out.error = err instanceof Error ? err.message : String(err);
-  }
-  return out;
-});
-
-if (videoResult.error) failures.push(`video: ${videoResult.error}`);
-if (videoResult.presented < 6) {
-  failures.push(`video: the element presented no frame (max ${videoResult.presented.toFixed(1)})`);
-}
-if (videoResult.lit < 0.10) {
-  failures.push(
-    `video: frames exist but the tube is black (${(videoResult.lit * 100).toFixed(1)}% lit) — the source texture upload is broken`,
-  );
-}
-
-/* -------- 4. the DSP worklet -------- */
-
-const audio = await page.evaluate(async (workletUrl) => {
-  const out = { registered: false, transportRms: 0, noiseRms: 0, error: null };
-  try {
-    const sr = 48000;
-    const ctx = new OfflineAudioContext(2, sr, sr);
-    await ctx.audioWorklet.addModule(workletUrl);
-    out.registered = true;
-
-    const params = {
-      'transport.enabled': true,
-      'transport.wowDepth': 0.4,
-      'transport.flutterDepth': 0.2,
-      'transport.dropoutRate': 0,
-      'noise.enabled': true,
-      'noise.flybackLevel': -20,
-      'noise.flybackSqueal': 0.4,
-      'noise.rumble': 0.4,
-      'crackle.enabled': false,
-      'link.enabled': false,
-    };
-
-    const osc = ctx.createOscillator();
-    osc.frequency.value = 440;
-    const transport = new AudioWorkletNode(ctx, 'crt-transport', {
-      outputChannelCount: [2],
-      processorOptions: { params, seed: 3 },
-    });
-    const noise = new AudioWorkletNode(ctx, 'crt-noise', {
-      numberOfInputs: 0,
-      outputChannelCount: [2],
-      processorOptions: { params, seed: 4, bus: 'acoustic' },
-    });
-    // Transport on the left, noise bed on the right, so both can be measured
-    // from one render.
-    const merger = ctx.createChannelMerger(2);
-    osc.connect(transport);
-    transport.connect(merger, 0, 0);
-    noise.connect(merger, 0, 1);
-    merger.connect(ctx.destination);
-    osc.start();
-
-    const rendered = await ctx.startRendering();
-    const rms = (ch) => {
-      const d = rendered.getChannelData(ch);
-      // Skip past the transport's base delay before measuring.
-      const from = Math.floor(sr * 0.2);
-      let sum = 0;
-      for (let i = from; i < d.length; i++) sum += d[i] * d[i];
-      return Math.sqrt(sum / (d.length - from));
-    };
-    out.transportRms = rms(0);
-    out.noiseRms = rms(1);
-  } catch (err) {
-    out.error = err instanceof Error ? err.message : String(err);
-  }
-  return out;
-}, `http://127.0.0.1:${port}/worklets/crtbox-dsp.js`);
-
-if (audio.error) failures.push(`audio: ${audio.error}`);
-if (!audio.registered) failures.push('audio: the worklet module did not register');
-if (audio.transportRms < 0.05) {
-  failures.push(`audio: the transport passed no signal (rms ${audio.transportRms.toExponential(2)})`);
-}
-if (audio.noiseRms < 1e-4) {
-  failures.push(`audio: the noise bed is silent (rms ${audio.noiseRms.toExponential(2)})`);
-}
-
-/* -------- 5. keyframing animates the render -------- */
-
-const keys = await page.evaluate(async () => {
-  const out = { armed: '', keyframes: 0, diamonds: 0, sat: [], error: null };
-  try {
-    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-    // React-controlled inputs need the native setter plus a real event.
-    const setInput = (el, value) => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, String(value));
-      el.dispatchEvent(new Event('input', { bubbles: true }));
-      el.dispatchEvent(new Event('change', { bubbles: true }));
-    };
-
-    // A saturated still makes signal loss (which fades to grey snow) easy to measure.
-    const src = document.createElement('canvas');
-    src.width = 320; src.height = 240;
-    const g = src.getContext('2d');
-    const bars = ['#c0c0c0', '#c0c000', '#00c0c0', '#00c000', '#c000c0', '#c00000', '#0000c0'];
-    bars.forEach((c, i) => { g.fillStyle = c; g.fillRect((i * 320) / 7, 0, 320 / 7 + 1, 240); });
-    const blob = await new Promise((r) => src.toBlob(r, 'image/png'));
-    const dt = new DataTransfer();
-    dt.items.add(new File([blob], 'still.png', { type: 'image/png' }));
-    window.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true }));
-    await sleep(900);
-
-    // The sidebar now has two engines; these assertions are about the tube, so
-    // select that tab rather than relying on which one opens by default.
-    const selectTab = async (name) => {
-      document.querySelector('.guide-close')?.click();
-      await sleep(250);
-      [...document.querySelectorAll('.tabs button')]
-        .find((b) => b.textContent.trim() === name)
-        ?.click();
-      await sleep(350);
-    };
-    await selectTab('Tube');
-
-    const row = [...document.querySelectorAll('.param')].find(
-      (r) => r.querySelector('.param-label')?.textContent === 'Signal loss',
-    );
-    if (!row) throw new Error('could not find the Signal loss parameter');
-
-    row.querySelector('.stopwatch').click();
-    await sleep(250);
-    out.armed = document.querySelector('.timeline-toggle .count')?.textContent ?? '';
-
-    const scrub = document.querySelector('input.scrub');
-    const slider = row.querySelector("input[type='range']");
-    setInput(scrub, 4);
-    await sleep(250);
-    setInput(slider, 1);
-    await sleep(250);
-
-    out.diamonds = document.querySelectorAll('.track .key').length;
-    out.keyframes = out.diamonds;
-
-    const app = document.querySelector('canvas');
-    const probe = document.createElement('canvas');
-    probe.width = 110; probe.height = 82;
-    const pg = probe.getContext('2d', { willReadFrequently: true });
-    for (const t of [0, 2, 4]) {
-      setInput(scrub, t);
-      await sleep(650);
-      pg.drawImage(app, 0, 0, probe.width, probe.height);
-      const d = pg.getImageData(0, 0, probe.width, probe.height).data;
-      let sat = 0;
-      let n = 0;
-      for (let i = 0; i < d.length; i += 4) {
-        const mx = Math.max(d[i], d[i + 1], d[i + 2]);
-        const mn = Math.min(d[i], d[i + 1], d[i + 2]);
-        if (mx > 20) { sat += (mx - mn) / mx; n++; }
-      }
-      out.sat.push(n ? sat / n : 0);
-    }
-  } catch (err) {
-    out.error = err instanceof Error ? err.message : String(err);
-  }
-  return out;
-});
-
-if (keys.error) failures.push(`keyframes: ${keys.error}`);
-if (keys.diamonds !== 2) {
-  failures.push(`keyframes: expected 2 keyframe markers, drew ${keys.diamonds}`);
-}
-if (keys.sat.length === 3) {
-  const [a, mid, b] = keys.sat;
-  if (a - b < 0.15) {
-    failures.push(
-      `keyframes: the animated parameter did not change the render (saturation ${a.toFixed(3)} -> ${b.toFixed(3)})`,
-    );
-  }
-  // Midway must land between the ends, or it is stepping rather than easing.
-  const lo = Math.min(a, b);
-  const hi = Math.max(a, b);
-  if (mid < lo - 0.02 || mid > hi + 0.02) {
-    failures.push(`keyframes: midpoint ${mid.toFixed(3)} is not between ${a.toFixed(3)} and ${b.toFixed(3)}`);
-  }
-} else {
-  failures.push('keyframes: could not sample the animation');
-}
-
-/*
- * Stages 6 and 7 get a fresh page. Stage 5 leaves a parameter animated, and an
- * animated parameter is driven by the timeline rather than by its slider — so
- * anything that tried to set up a clean state on the same page would be
- * silently overridden and the assertions would be meaningless.
- */
-const page2 = await browser.newPage({ viewport: { width: 1400, height: 900 } });
-page2.on('pageerror', (err) => failures.push(`page2 error: ${err.message}`));
-await page2.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'load' });
-await page2.waitForTimeout(1200);
-
-/* -------- 6. the output frame is the shape of the tube -------- */
-
-/*
- * The export used to take the source dimensions and multiply by a scale factor,
- * while the tube pass pillarboxes the raster inside whatever frame it is given.
- * Choosing 4:3 on a 16:9 source therefore produced a 16:9 file with the picture
- * floating in the middle of it — the setting changed the picture and never the
- * file. Both the preview canvas and the computed export size now come from one
- * function, so this asserts the canvas actually follows the setting.
- */
-
-const framing = await page2.evaluate(async () => {
-  const out = { ratios: {}, error: null };
-  try {
-    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-    // The sidebar now has two engines; these assertions are about the tube, so
-    // select that tab rather than relying on which one opens by default.
-    const selectTab = async (name) => {
-      document.querySelector('.guide-close')?.click();
-      await sleep(250);
-      [...document.querySelectorAll('.tabs button')]
-        .find((b) => b.textContent.trim() === name)
-        ?.click();
-      await sleep(350);
-    };
-    await selectTab('Tube');
-    const openGroup = (title) => {
-      const toggle = [...document.querySelectorAll('.group')].find(
-        (s) => s.querySelector('.group-title')?.textContent === title,
-      );
-      if (!toggle) throw new Error(`no group called ${title}`);
-      if (!toggle.classList.contains('open')) toggle.querySelector('.group-toggle').click();
-    };
-
-    openGroup('Tube Geometry');
-    await sleep(300);
-
-    const row = [...document.querySelectorAll('.param')].find(
-      (r) => r.querySelector('.param-label')?.textContent === 'Aspect',
-    );
-    if (!row) throw new Error('could not find the Aspect parameter');
-    const select = row.querySelector('select');
-
-    for (const value of ['4:3', '16:9']) {
-      select.value = value;
-      select.dispatchEvent(new Event('change', { bubbles: true }));
-      await sleep(500);
-      const c = document.querySelector('.stage canvas');
-      out.ratios[value] = c.width / c.height;
-    }
-  } catch (err) {
-    out.error = String(err);
-  }
-  return out;
-});
-
-if (framing.error) {
-  failures.push(`framing: ${framing.error}`);
-} else {
-  for (const [label, want] of [['4:3', 4 / 3], ['16:9', 16 / 9]]) {
-    const got = framing.ratios[label];
-    if (!got || Math.abs(got - want) > 0.03) {
-      failures.push(
-        `framing: with aspect ${label} the frame is ${got?.toFixed(3)}, expected ${want.toFixed(3)} — the export would carry baked-in bars`,
-      );
-    }
-  }
-}
-
-/* -------- 7. persistence survives frame-stepped rendering -------- */
-
-/*
- * The <video> element reset the phosphor buffers on `seeking`, which is right
- * for a user scrubbing and catastrophic for an export: stepping frame by frame
- * seeks every frame, so the trails were wiped before each one and no rendered
- * video ever had them.
- *
- * Measured by loading a lit still, swapping it for black, and checking the
- * screen is still glowing immediately afterwards.
- */
-
-const trails = await page2.evaluate(async () => {
-  const out = { bright: 0, afterDark: 0, settled: 0, error: null };
-  try {
-    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-    const setInput = (el, value) => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, String(value));
-      el.dispatchEvent(new Event('input', { bubbles: true }));
-      el.dispatchEvent(new Event('change', { bubbles: true }));
-    };
-    const openGroup = (title) => {
-      const s = [...document.querySelectorAll('.group')].find(
-        (g) => g.querySelector('.group-title')?.textContent === title,
-      );
-      if (s && !s.classList.contains('open')) s.querySelector('.group-toggle').click();
-    };
-    const setParam = (label, v) => {
-      const row = [...document.querySelectorAll('.param')].find(
-        (r) => r.querySelector('.param-label')?.textContent === label,
-      );
-      if (!row) return false;
-      const slider = row.querySelector("input[type='range']");
-      if (!slider) return false;
-      setInput(slider, v);
-      return true;
-    };
-
-    const drop = async (paint, name) => {
-      const c = document.createElement('canvas');
-      c.width = 320;
-      c.height = 240;
-      paint(c.getContext('2d'));
-      const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
-      const dt = new DataTransfer();
-      dt.items.add(new File([blob], name, { type: 'image/png' }));
-      window.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true }));
-    };
-
-    // A white field, so the only thing that can be lit afterwards is phosphor.
-    await drop((g) => {
-      g.fillStyle = '#fff';
-      g.fillRect(0, 0, 320, 240);
-    }, 'white.png');
-    await sleep(1000);
-
-    // The sidebar now has two engines; these assertions are about the tube, so
-    // select that tab rather than relying on which one opens by default.
-    const selectTab = async (name) => {
-      document.querySelector('.guide-close')?.click();
-      await sleep(250);
-      [...document.querySelectorAll('.tabs button')]
-        .find((b) => b.textContent.trim() === name)
-        ?.click();
-      await sleep(350);
-    };
-    await selectTab('Tube');
-
-    // Long persistence; everything else that could light the screen on its own
-    // goes to zero so the measurement is unambiguous.
-    openGroup('Phosphor & Mask');
-    openGroup('Signal & Reception');
-    openGroup('Faults & Wear');
-    openGroup('Output');
-    await sleep(350);
-    const missing = [];
-    for (const [label, v] of [
-      ['Persistence', 0.95],
-      ['Snow', 0],
-      ['Signal loss', 0],
-      ['Dust & smears', 0],
-      ['Ambient light', 0],
-    ]) {
-      if (!setParam(label, v)) missing.push(label);
-    }
-    if (missing.length) throw new Error(`could not set ${missing.join(', ')}`);
-    await sleep(700);
-
-
-    const app = document.querySelector('.stage canvas');
-    const probe = document.createElement('canvas');
-    probe.width = 96;
-    probe.height = 72;
-    const pg = probe.getContext('2d', { willReadFrequently: true });
-    const meanLuma = () => {
-      pg.drawImage(app, 0, 0, probe.width, probe.height);
-      const d = pg.getImageData(0, 0, probe.width, probe.height).data;
-      let sum = 0;
-      for (let i = 0; i < d.length; i += 4) sum += (d[i] + d[i + 1] + d[i + 2]) / 3;
-      return sum / (d.length / 4);
-    };
-
-    for (let i = 0; i < 40 && meanLuma() < 20; i++) await sleep(250);
-    out.bright = meanLuma();
-
-    // Drive the picture to black by closing the video amplifier down rather
-    // than by loading a black frame: swapping media legitimately clears the
-    // phosphor, so that would measure the reset and not the decay.
-    if (!setParam('Contrast', 0)) throw new Error('could not set Contrast');
-    if (!setParam('Brightness', -0.5)) throw new Error('could not set Brightness');
-
-    // Immediately after the picture goes black the phosphor must still be lit.
-    await sleep(150);
-    out.afterDark = meanLuma();
-    await sleep(3000);
-    out.settled = meanLuma();
-  } catch (err) {
-    out.error = String(err);
-  }
-  return out;
-});
-
-if (trails.error) {
-  failures.push(`trails: ${trails.error}`);
-} else if (trails.bright < 8) {
-  failures.push(
-    `trails: the reference frame was not lit (${trails.bright.toFixed(1)}), so decay cannot be measured`,
-  );
-} else if (trails.afterDark <= trails.settled + 1) {
-  failures.push(
-    `trails: no afterglow — ${trails.afterDark.toFixed(1)} just after the picture went black vs ${trails.settled.toFixed(1)} once settled. The phosphor buffer is being cleared.`,
-  );
-}
-
-/* -------- 8. the app runs the way the packaged build loads it -------- */
-
-/*
- * Everything above is served over HTTP, which is how the dev server and the web
- * build work — and is exactly why a file://-only defect shipped to Windows
- * without anything failing. The desktop app calls loadFile(), so the bundle,
- * the worklet and the media all arrive over file://. This stage loads the built
- * output that way and asserts the app still mounts and lights the tube.
- */
-
-const packaged = { url: pathToFileURL(join(root, 'index.html')).href, mounted: 0, lit: 0, error: null };
-{
-  const page3 = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+async function openPage(url = base, { guide = false } = {}) {
+  const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
   const noise = [];
-  page3.on('pageerror', (err) => noise.push(`pageerror: ${err.message}`));
-  page3.on('console', (msg) => {
+  page.on('pageerror', (err) => noise.push(`pageerror: ${err.message}`));
+  page.on('console', (msg) => {
     const text = msg.text();
-    if (
-      msg.type() === 'error' &&
-      !/favicon/.test(text) &&
-      !/status of 404/.test(text) &&
-      !/Automatic fallback to software WebGL/.test(text)
-    ) {
-      noise.push(`console: ${text}`);
-    }
+    if (msg.type() === 'error' && !IGNORED_CONSOLE.some((r) => r.test(text))) noise.push(`console: ${text}`);
   });
+  if (!guide) {
+    await page.addInitScript(() => {
+      try {
+        localStorage.setItem('filmbox.guide.hideOnStart', '1');
+      } catch {
+        /* private window */
+      }
+    });
+  }
+  await page.goto(url, { waitUntil: 'load' });
+  await page.waitForFunction(() => !!window.__filmbox && !!document.querySelector('.stage canvas'), null, {
+    timeout: 60000,
+  });
+  return { page, noise };
+}
 
-  try {
-    await page3.goto(packaged.url, { waitUntil: 'load' });
-    await page3.waitForTimeout(2500);
-    const probe = await page3.evaluate(async () => {
-      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-      // Drop a lit still in so the tube has something to show.
+/** Run a probe render in the page and return frames with RGB pixels. */
+function probe(page, req) {
+  return page.evaluate((r) => window.__filmbox.renderProbe(r), { pixels: true, seed: 1337, ...req });
+}
+
+/* ------------------------------------------------------------------ *
+ * Image analysis, on the Node side
+ * ------------------------------------------------------------------ */
+
+function luma(frame, w, h) {
+  const out = new Float64Array(w * h);
+  for (let i = 0; i < w * h; i++) {
+    out[i] = 0.2126 * frame.rgb[i * 3] + 0.7152 * frame.rgb[i * 3 + 1] + 0.0722 * frame.rgb[i * 3 + 2];
+  }
+  return out;
+}
+
+function channel(frame, w, h, c) {
+  const out = new Float64Array(w * h);
+  for (let i = 0; i < w * h; i++) out[i] = frame.rgb[i * 3 + c];
+  return out;
+}
+
+/** Subtract a (2r+1)² box mean: what is left is grain, dirt and fine detail. */
+function highpass(g, w, h, r = 3) {
+  const out = new Float64Array(w * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let s = 0;
+      let n = 0;
+      for (let dy = -r; dy <= r; dy++) {
+        const yy = Math.min(h - 1, Math.max(0, y + dy));
+        for (let dx = -r; dx <= r; dx++) {
+          const xx = Math.min(w - 1, Math.max(0, x + dx));
+          s += g[yy * w + xx];
+          n++;
+        }
+      }
+      out[y * w + x] = g[y * w + x] - s / n;
+    }
+  }
+  return out;
+}
+
+/** Normalised correlation of a against b shifted by (dx, dy), over a central window. */
+function correlate(a, b, w, h, dx, dy, margin = 12) {
+  let sab = 0;
+  let saa = 0;
+  let sbb = 0;
+  for (let y = margin; y < h - margin; y++) {
+    for (let x = margin; x < w - margin; x++) {
+      const va = a[y * w + x];
+      const vb = b[(y + dy) * w + (x + dx)];
+      sab += va * vb;
+      saa += va * va;
+      sbb += vb * vb;
+    }
+  }
+  return sab / Math.sqrt(saa * sbb + 1e-12);
+}
+
+function bestShift(a, b, w, h, range) {
+  let best = { dx: 0, dy: 0, c: -2 };
+  for (let dy = -range; dy <= range; dy++) {
+    for (let dx = -range; dx <= range; dx++) {
+      const c = correlate(a, b, w, h, dx, dy, range + 4);
+      if (c > best.c) best = { dx, dy, c };
+    }
+  }
+  return best;
+}
+
+function stdOf(a, w, h, margin = 10) {
+  let s = 0;
+  let s2 = 0;
+  let n = 0;
+  for (let y = margin; y < h - margin; y++) {
+    for (let x = margin; x < w - margin; x++) {
+      const v = a[y * w + x];
+      s += v;
+      s2 += v * v;
+      n++;
+    }
+  }
+  const m = s / n;
+  return Math.sqrt(Math.max(0, s2 / n - m * m));
+}
+
+function meanAbsDiff(fa, fb) {
+  let d = 0;
+  for (let i = 0; i < fa.rgb.length; i++) d += Math.abs(fa.rgb[i] - fb.rgb[i]);
+  return d / fa.rgb.length;
+}
+
+const srgbToLinear = (c) => {
+  const v = c / 255;
+  return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+};
+
+/** Settings that leave only the stock: no machinery, no lens, no grain. */
+const CLEAN = {
+  'engine.gate': false,
+  'lens.enabled': false,
+  'grain.enabled': false,
+  'halation.enabled': false,
+  'framing.aspect': 'gate',
+  'framing.overscan': -0.2,
+};
+
+/* ================================================================== *
+ * 1. The app mounts and every shader links
+ * ================================================================== */
+
+const main = await openPage();
+{
+  const { page } = main;
+  if (await page.locator('.fatal').count()) fail('mount', await page.locator('.fatal p').innerText());
+  const kind = await page.evaluate(async () => {
+    const r = await window.__filmbox.renderProbe({
+      backend: 'gpu',
+      settings: {},
+      source: { kind: 'bars' },
+      width: 64,
+      height: 44,
+      frames: [0],
+    });
+    return r.backend;
+  });
+  if (kind !== 'gpu') fail('mount', `the GPU backend did not start (got ${kind}) — a shader failed to compile or link`);
+  else note('mount', 'app mounted · camera, glow, film and present programs linked on WebGL2');
+}
+
+/* ================================================================== *
+ * 2. A still pushed through the interface comes out lit, with grain
+ * ================================================================== */
+
+/** Drop a generated still onto the window, as a user would. */
+async function dropStill(page, draw, w = 640, h = 480) {
+  await page.evaluate(
+    async ({ draw, w, h }) => {
       const c = document.createElement('canvas');
-      c.width = 320;
-      c.height = 240;
+      c.width = w;
+      c.height = h;
       const g = c.getContext('2d');
-      g.fillStyle = '#d8d8d8';
-      g.fillRect(0, 0, 320, 240);
+      // eslint-disable-next-line no-new-func
+      new Function('g', 'w', 'h', draw)(g, w, h);
       const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
       const dt = new DataTransfer();
       dt.items.add(new File([blob], 'still.png', { type: 'image/png' }));
       window.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true }));
+    },
+    { draw, w, h },
+  );
+}
 
-      // Poll rather than sleep a fixed time. Over file:// the decode and the
-      // first rAF-driven upload land later than over HTTP, and how much later
-      // depends on how loaded the machine is — a fixed wait here is a flaky
-      // test, which is worse than no test.
+const BARS = `
+  const bars = ['#c0c0c0', '#c0c000', '#00c0c0', '#00c000', '#c000c0', '#c00000', '#0000c0'];
+  bars.forEach((c, i) => { g.fillStyle = c; g.fillRect((i * w) / 7, 0, w / 7 + 1, h * 0.75); });
+  g.fillStyle = '#000'; g.fillRect(0, h * 0.75, w, h * 0.25);
+  g.fillStyle = '#fff'; g.fillRect(w * 0.06, h * 0.8, w * 0.25, h * 0.15);
+`;
+
+/**
+ * Sample the stage canvas until the picture has settled: lit, and two
+ * consecutive samples agreeing on the mean. Returns the last sample.
+ */
+async function settledStats(page, { minMean = 20, tolerance = 2.5, timeout = 15000 } = {}) {
+  return page.evaluate(
+    async ({ minMean, tolerance, timeout }) => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       const p = document.createElement('canvas');
-      p.width = 80;
-      p.height = 60;
-      const pg = p.getContext('2d', { willReadFrequently: true });
-      const litFraction = () => {
+      p.width = 160;
+      p.height = 112;
+      const g = p.getContext('2d', { willReadFrequently: true });
+      const sample = () => {
         const app = document.querySelector('.stage canvas');
-        if (!app || app.width < 2) return 0;
-        pg.drawImage(app, 0, 0, p.width, p.height);
-        const d = pg.getImageData(0, 0, p.width, p.height).data;
+        g.drawImage(app, 0, 0, p.width, p.height);
+        const d = g.getImageData(0, 0, p.width, p.height).data;
+        let sum = 0;
         let lit = 0;
+        let min = 255;
+        let max = 0;
+        let sat = 0;
+        let satN = 0;
         for (let i = 0; i < d.length; i += 4) {
-          if ((d[i] + d[i + 1] + d[i + 2]) / 3 > 24) lit++;
+          const l = (d[i] + d[i + 1] + d[i + 2]) / 3;
+          sum += l;
+          if (l > 24) lit++;
+          min = Math.min(min, l);
+          max = Math.max(max, l);
+          const mx = Math.max(d[i], d[i + 1], d[i + 2]);
+          const mn = Math.min(d[i], d[i + 1], d[i + 2]);
+          if (mx > 20) {
+            sat += (mx - mn) / mx;
+            satN++;
+          }
         }
-        return lit / (p.width * p.height);
+        const n = d.length / 4;
+        return { mean: sum / n, lit: lit / n, contrast: (max - min) / 255, sat: satN ? sat / satN : 0, w: app.width, h: app.height };
       };
-
-      let lit = 0;
-      for (let i = 0; i < 40 && lit < 0.1; i++) {
-        await sleep(250);
-        lit = litFraction();
+      const t0 = performance.now();
+      let last = sample();
+      while (performance.now() - t0 < timeout) {
+        await sleep(200);
+        const now = sample();
+        if (now.mean >= minMean && Math.abs(now.mean - last.mean) < tolerance) return now;
+        last = now;
       }
+      return last;
+    },
+    { minMean, tolerance, timeout },
+  );
+}
 
-      return {
-        mounted: (document.getElementById('root')?.innerHTML || '').length,
-        lit,
-      };
-    });
-    packaged.mounted = probe.mounted;
-    packaged.lit = probe.lit;
-  } catch (err) {
-    packaged.error = String(err);
-  }
-  await page3.close();
+{
+  const { page } = main;
+  await dropStill(page, BARS);
+  const s = await settledStats(page);
+  if (s.lit < 0.3) fail('picture', `only ${(s.lit * 100).toFixed(1)}% of the canvas is lit`);
+  if (s.contrast < 0.5) fail('picture', `contrast is only ${s.contrast.toFixed(2)}`);
+  // The flagship is a Super 8 cartridge: there must be texture in a flat bar.
+  const texture = await page.evaluate(() => {
+    const app = document.querySelector('.stage canvas');
+    const p = document.createElement('canvas');
+    p.width = app.width;
+    p.height = app.height;
+    const g = p.getContext('2d', { willReadFrequently: true });
+    g.drawImage(app, 0, 0);
+    // Inside the grey bar, well clear of its edges.
+    const x0 = Math.round(app.width * 0.03);
+    const x1 = Math.round(app.width * 0.11);
+    const y0 = Math.round(app.height * 0.3);
+    const y1 = Math.round(app.height * 0.5);
+    const w = x1 - x0;
+    const d = g.getImageData(x0, y0, w, y1 - y0).data;
+    // Median of neighbour differences, scaled to a standard deviation: grain
+    // everywhere counts, a speck of dirt that happens to land here does not.
+    const diffs = [];
+    for (let i = 0; i + 4 < d.length; i += 4) {
+      if ((i / 4) % w === w - 1) continue;
+      diffs.push(Math.abs(d[i + 1] - d[i + 5]));
+    }
+    diffs.sort((a, b) => a - b);
+    return (diffs[Math.floor(diffs.length / 2)] * 1.4826) / Math.SQRT2;
+  });
+  if (texture < 1.5) fail('picture', `a flat area of the Super 8 picture has no grain (σ ${texture.toFixed(2)})`);
+  note('picture', `${(s.lit * 100).toFixed(1)}% lit · contrast ${s.contrast.toFixed(2)} · grain σ ${texture.toFixed(1)} in a flat bar`);
+}
 
-  if (packaged.error) {
-    failures.push(`packaged: ${packaged.error}`);
-  } else {
-    if (packaged.mounted < 500) {
-      failures.push(
-        `packaged: the app did not mount over file:// (root is ${packaged.mounted} chars) — the desktop build would open to an empty window`,
-      );
+/* ================================================================== *
+ * 3. A real video clip reaches the film
+ * ================================================================== */
+
+{
+  const { page } = main;
+  const r = await page.evaluate(async () => {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const out = { presented: 0, lit: 0, error: null };
+    try {
+      const blob = await (await fetch('/fixture.webm')).blob();
+      const dt = new DataTransfer();
+      dt.items.add(new File([blob], 'motion.webm', { type: 'video/webm' }));
+      window.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true }));
+      const t0 = performance.now();
+      let video = null;
+      while (performance.now() - t0 < 20000) {
+        const v = document.querySelector('video');
+        if (v && v.readyState >= 2 && v.videoWidth > 0) {
+          video = v;
+          break;
+        }
+        await sleep(80);
+      }
+      if (!video) throw new Error('video never decoded');
+      document.querySelector('.transport .play')?.click();
+      const vp = document.createElement('canvas');
+      vp.width = 48;
+      vp.height = 36;
+      const vg = vp.getContext('2d', { willReadFrequently: true });
+      const probe = document.createElement('canvas');
+      probe.width = 96;
+      probe.height = 64;
+      const pg = probe.getContext('2d', { willReadFrequently: true });
+      const t1 = performance.now();
+      while (performance.now() - t1 < 15000) {
+        await sleep(200);
+        vg.drawImage(video, 0, 0, 48, 36);
+        const vd = vg.getImageData(0, 0, 48, 36).data;
+        let pres = 0;
+        for (let i = 0; i < vd.length; i += 4) pres = Math.max(pres, (vd[i] + vd[i + 1] + vd[i + 2]) / 3);
+        out.presented = pres;
+        pg.drawImage(document.querySelector('.stage canvas'), 0, 0, 96, 64);
+        const d = pg.getImageData(0, 0, 96, 64).data;
+        let lit = 0;
+        for (let i = 0; i < d.length; i += 4) if ((d[i] + d[i + 1] + d[i + 2]) / 3 > 24) lit++;
+        out.lit = lit / (96 * 64);
+        if (out.presented > 6 && out.lit > 0.15) break;
+      }
+      video.pause();
+    } catch (err) {
+      out.error = String(err);
     }
-    if (packaged.lit < 0.1) {
-      failures.push(
-        `packaged: mounted over file:// but the tube is black (${(packaged.lit * 100).toFixed(1)}% lit)`,
-      );
-    }
-    for (const n of noise) failures.push(`packaged ${n}`);
+    return out;
+  });
+  if (r.error) fail('video', r.error);
+  else {
+    if (r.presented < 6) fail('video', `the element presented no frame (max ${r.presented.toFixed(1)})`);
+    if (r.lit < 0.15) fail('video', `frames exist but the film is black (${(r.lit * 100).toFixed(1)}% lit) — the source upload is broken`);
+    note('video', `element ${r.presented.toFixed(0)} · film ${(r.lit * 100).toFixed(1)}% lit`);
   }
 }
 
-/* -------- 9. the colour and glitch sections are actually wired -------- */
+/* ================================================================== *
+ * 4. The DSP worklet: three processors, frame-locked clatter
+ * ================================================================== */
 
-/*
- * A new parameter group is easy to add to the schema and easy to forget to
- * plumb into the shader, and the failure is silent: the control moves, the
- * uniform is never set, nothing happens. So this drives the real controls and
- * asserts the picture responds.
- *
- * Glitching is compared off-versus-on at one instant rather than frame to
- * frame. Its event clock runs on transport time, which does not advance on a
- * paused still, so a perfectly working tear can be completely static — a
- * frame-to-frame diff would call that a failure.
- */
-
-const sections = await (async () => {
-  const p = await browser.newPage({ viewport: { width: 1400, height: 900 } });
-  await p.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'load' });
-  await p.waitForTimeout(1200);
-  const out = await p.evaluate(async () => {
-    const res = { satFull: 0, satZero: 0, warmRB: 0, coldRB: 0, glitchOnVsOff: 0, error: null };
+{
+  const { page } = main;
+  const a = await page.evaluate(async (url) => {
+    const out = { registered: false, transportRms: 0, hissRms: 0, clackInterval: 0, clacks: 0, error: null };
     try {
+      const sr = 48000;
+      const ctx = new OfflineAudioContext(3, sr * 2, sr);
+      await ctx.audioWorklet.addModule(url);
+      out.registered = true;
+      const params = {
+        'film.cameraFps': 18,
+        'film.projectorFps': 18,
+        'transport.enabled': true,
+        'transport.wowDepth': 0.4,
+        'audio.enabled': true,
+        'track.code': 0,
+        'magnetic.enabled': true,
+        'magnetic.hiss': -40,
+        'magnetic.dropouts': 0,
+        'projnoise.enabled': true,
+        'projnoise.level': -12,
+        'projnoise.claw': 1,
+        'projnoise.shutter': 0,
+        'projnoise.motor': 0,
+        'projnoise.wear': 0,
+        'link.enabled': false,
+      };
+      const osc = ctx.createOscillator();
+      osc.frequency.value = 440;
+      const transport = new AudioWorkletNode(ctx, 'film-transport', { outputChannelCount: [2], processorOptions: { params, seed: 3 } });
+      const track = new AudioWorkletNode(ctx, 'film-track', { numberOfInputs: 2, outputChannelCount: [2], processorOptions: { params, seed: 3 } });
+      const projector = new AudioWorkletNode(ctx, 'film-projector', { numberOfInputs: 0, outputChannelCount: [2], processorOptions: { params, seed: 3 } });
+      const merger = ctx.createChannelMerger(3);
+      osc.connect(transport);
+      transport.connect(merger, 0, 0);
+      // The track with no programme: only its own hiss.
+      track.connect(merger, 0, 1);
+      projector.connect(merger, 0, 2);
+      merger.connect(ctx.destination);
+      osc.start();
+      const buf = await ctx.startRendering();
+      const rms = (d, from) => {
+        let s = 0;
+        for (let i = from; i < d.length; i++) s += d[i] * d[i];
+        return Math.sqrt(s / (d.length - from));
+      };
+      out.transportRms = rms(buf.getChannelData(0), sr * 0.2);
+      out.hissRms = rms(buf.getChannelData(1), 0);
+      // Clack onsets: 2 ms envelope peaks, spaced at least 30 ms.
+      const d = buf.getChannelData(2);
+      const bin = sr / 500;
+      const env = [];
+      for (let i = 0; i < d.length; i += bin) {
+        let m = 0;
+        for (let k = i; k < i + bin && k < d.length; k++) m = Math.max(m, Math.abs(d[k]));
+        env.push(m);
+      }
+      const thr = Math.max(...env) * 0.25;
+      const on = [];
+      for (let i = 1; i < env.length; i++) {
+        if (env[i] > thr && env[i - 1] <= thr && (on.length === 0 || i - on[on.length - 1] > 15)) on.push(i);
+      }
+      const gaps = on.slice(1).map((v, i) => (v - on[i]) * 2);
+      gaps.sort((x, y) => x - y);
+      out.clacks = on.length;
+      out.clackInterval = gaps.length ? gaps[Math.floor(gaps.length / 2)] : 0;
+    } catch (err) {
+      out.error = String(err);
+    }
+    return out;
+  }, `${base}worklets/filmbox-dsp.js`);
+  if (a.error) fail('audio', a.error);
+  else {
+    if (!a.registered) fail('audio', 'the worklet module did not register');
+    if (a.transportRms < 0.05) fail('audio', `the transport passed no signal (rms ${a.transportRms.toExponential(2)})`);
+    if (a.hissRms < 1e-3) fail('audio', `the magnetic stripe is silent with no programme (rms ${a.hissRms.toExponential(2)})`);
+    if (Math.abs(a.clackInterval - 1000 / 18) > 4) {
+      fail('audio', `projector clatter is not locked to 18 fps: median interval ${a.clackInterval} ms against 55.6`);
+    }
+    note('audio', `transport rms ${a.transportRms.toFixed(3)} · stripe hiss ${a.hissRms.toFixed(4)} · clatter every ${a.clackInterval} ms (${a.clacks} strikes in 2 s)`);
+  }
+}
+
+/* ================================================================== *
+ * 5. Keyframes animate the render, and ease between
+ * ================================================================== */
+
+{
+  const { page } = await openPage();
+  try {
+    // A calm look, so the brightness is not dominated by flicker and leaks.
+    await page.selectOption('.topbar-actions select', 'reference');
+    await dropStill(page, `g.fillStyle = '#909090'; g.fillRect(0, 0, w, h);`);
+    await settledStats(page);
+    const r = await page.evaluate(async () => {
       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-      const setInput = (el, v) => {
-        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, String(v));
+      const setInput = (el, value) => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, String(value));
         el.dispatchEvent(new Event('input', { bubbles: true }));
         el.dispatchEvent(new Event('change', { bubbles: true }));
       };
-      const sect = (t) =>
-        [...document.querySelectorAll('.group')].find(
-          (g) => g.querySelector('.group-title')?.textContent === t,
-        );
-      const open = (t) => {
-        const s = sect(t);
-        if (s && !s.classList.contains('open')) s.querySelector('.group-toggle').click();
-      };
-      const enable = (t, v) => {
-        const c = sect(t)?.querySelector(".group-actions input[type='checkbox']");
-        if (!c) throw new Error(`no enable switch on ${t}`);
-        if (c.checked !== v) c.click();
-      };
-      const setP = (label, v) => {
-        const row = [...document.querySelectorAll('.param')].find(
-          (r) => r.querySelector('.param-label')?.textContent === label,
-        );
-        const slider = row?.querySelector("input[type='range']");
-        if (!slider) throw new Error(`no slider for ${label}`);
-        setInput(slider, v);
-      };
-      const selectTab = async (name) => {
-        document.querySelector('.guide-close')?.click();
-        await sleep(250);
-        [...document.querySelectorAll('.tabs button')]
-          .find((b) => b.textContent.trim() === name)
-          ?.click();
-        await sleep(350);
-      };
-
-      const src = document.createElement('canvas');
-      src.width = 320;
-      src.height = 240;
-      const g = src.getContext('2d');
-      ['#c0c0c0', '#c0c000', '#00c0c0', '#00c000', '#c000c0', '#c00000', '#0000c0'].forEach(
-        (c, i) => {
-          g.fillStyle = c;
-          g.fillRect((i * 320) / 7, 0, 320 / 7 + 1, 240);
-        },
-      );
-      const blob = await new Promise((r) => src.toBlob(r, 'image/png'));
-      const dt = new DataTransfer();
-      dt.items.add(new File([blob], 'bars.png', { type: 'image/png' }));
-      window.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true }));
-
-      const app = document.querySelector('.stage canvas');
-      const probe = document.createElement('canvas');
-      probe.width = 160;
-      probe.height = 120;
-      const pg = probe.getContext('2d', { willReadFrequently: true });
-      const pixels = () => {
-        pg.drawImage(app, 0, 0, probe.width, probe.height);
-        return pg.getImageData(0, 0, probe.width, probe.height).data;
-      };
-      const measure = () => {
-        const d = pixels();
-        let sat = 0;
-        let n = 0;
-        let rb = 0;
-        for (let i = 0; i < d.length; i += 4) {
-          const mx = Math.max(d[i], d[i + 1], d[i + 2]);
-          const mn = Math.min(d[i], d[i + 1], d[i + 2]);
-          if (mx > 18) {
-            sat += (mx - mn) / mx;
-            n++;
-          }
-          rb += d[i + 2] - d[i];
-        }
-        return { sat: n ? sat / n : 0, rb: rb / (d.length / 4) };
-      };
-
-      await selectTab('Tube');
-      open('Colour');
-      // The poll below can exit without ever sleeping when the picture is
-      // already drawn, so the group has to be given a chance to render first or
-      // every lookup after this runs against the previous DOM.
-      await sleep(400);
-
-      // Poll for the picture rather than assuming a fixed decode time; a fixed
-      // wait here turns a passing test into an occasionally-failing one.
-      for (let i = 0; i < 40 && measure().sat < 0.2; i++) await sleep(250);
-
-      res.satFull = measure().sat;
-      setP('Saturation', 0);
-      await sleep(600);
-      res.satZero = measure().sat;
-      setP('Saturation', 1);
-      await sleep(400);
-
-      setP('Temperature', -1);
-      await sleep(600);
-      res.warmRB = measure().rb;
-      setP('Temperature', 1);
-      await sleep(600);
-      res.coldRB = measure().rb;
-      setP('Temperature', 0);
-      await sleep(400);
-
-      // Freeze everything that moves on its own, so the only difference between
-      // the two captures is the glitch section.
-      enable('Sync & Timebase', false);
-      enable('Faults & Wear', false);
-      open('Signal & Reception');
+      [...document.querySelectorAll('.tabs button')].find((b) => b.textContent.trim() === 'Lens')?.click();
       await sleep(300);
-      for (const [l, v] of [['Snow', 0], ['Signal loss', 0], ['Interference', 0]]) setP(l, v);
-      await sleep(600);
-
-      const off = pixels();
-      enable('Glitching', true);
-      open('Glitching');
-      await sleep(350);
-      for (const [l, v] of [
-        ['Event rate', 1],
-        ['Tape dropout', 1],
-        ['Line repeat', 1],
-        ['Sync slip', 1],
-        ['Chroma burst', 1],
-        ['Polarity flip', 1],
-      ]) {
-        setP(l, v);
+      const row = [...document.querySelectorAll('.param')].find((x) => x.querySelector('.param-label')?.textContent === 'Exposure');
+      if (!row) throw new Error('could not find the Exposure parameter');
+      row.querySelector('.stopwatch').click();
+      await sleep(200);
+      const scrub = document.querySelector('input.scrub');
+      setInput(scrub, 4);
+      await sleep(200);
+      setInput(row.querySelector("input[type='range']"), -3);
+      await sleep(200);
+      const diamonds = document.querySelectorAll('.track .key').length;
+      const app = document.querySelector('.stage canvas');
+      const p = document.createElement('canvas');
+      p.width = 64;
+      p.height = 44;
+      const g = p.getContext('2d', { willReadFrequently: true });
+      const mean = () => {
+        g.drawImage(app, 0, 0, 64, 44);
+        const d = g.getImageData(0, 0, 64, 44).data;
+        let s = 0;
+        for (let i = 0; i < d.length; i += 4) s += d[i + 1];
+        return s / (d.length / 4);
+      };
+      const levels = [];
+      for (const t of [0, 2, 4]) {
+        setInput(scrub, t);
+        // Average a run of samples once the value has stopped moving.
+        let last = -1;
+        for (let k = 0; k < 40; k++) {
+          await sleep(120);
+          const m = mean();
+          if (Math.abs(m - last) < 3) break;
+          last = m;
+        }
+        let acc = 0;
+        for (let k = 0; k < 5; k++) {
+          await sleep(60);
+          acc += mean();
+        }
+        levels.push(acc / 5);
       }
-      await sleep(900);
-      const on = pixels();
-      let sum = 0;
-      for (let i = 0; i < off.length; i += 4) {
-        sum += Math.abs(off[i] - on[i]) + Math.abs(off[i + 1] - on[i + 1]) + Math.abs(off[i + 2] - on[i + 2]);
-      }
-      res.glitchOnVsOff = sum / (off.length / 4);
-    } catch (err) {
-      res.error = String(err);
+      return { diamonds, levels };
+    });
+    if (r.diamonds !== 2) fail('keyframes', `expected 2 keyframe markers, drew ${r.diamonds}`);
+    const [a, mid, b] = r.levels;
+    if (a - b < 30) fail('keyframes', `three stops less exposure barely changed the render (${a.toFixed(1)} → ${b.toFixed(1)})`);
+    if (mid < Math.min(a, b) + 3 || mid > Math.max(a, b) - 3) {
+      fail('keyframes', `midpoint ${mid.toFixed(1)} is not between ${a.toFixed(1)} and ${b.toFixed(1)} — stepping, not easing`);
     }
-    return res;
-  });
-  await p.close();
-  return out;
-})();
+    note('keyframes', `${r.diamonds} markers · brightness ${r.levels.map((v) => v.toFixed(0)).join(' → ')}`);
+  } catch (err) {
+    fail('keyframes', String(err));
+  }
+  await page.close();
+}
 
-if (sections.error) {
-  failures.push(`sections: ${sections.error}`);
-} else {
-  if (sections.satFull < 0.2) {
-    failures.push(`colour: the reference frame is not saturated (${sections.satFull.toFixed(3)})`);
-  } else if (sections.satZero > 0.05) {
-    failures.push(
-      `colour: Saturation 0 left ${sections.satZero.toFixed(3)} saturation — the control is not reaching the shader`,
-    );
+/* ================================================================== *
+ * 6. The output frame is the shape of the projected picture
+ * ================================================================== */
+
+{
+  const { page } = await openPage();
+  try {
+    const ratios = await page.evaluate(async () => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      [...document.querySelectorAll('.tabs button')].find((b) => b.textContent.trim() === 'Gate')?.click();
+      await sleep(300);
+      const sect = [...document.querySelectorAll('.group')].find((s) => s.querySelector('.group-title')?.textContent === 'Framing & Output');
+      if (!sect) throw new Error('no Framing & Output section');
+      if (!sect.classList.contains('open')) sect.querySelector('.group-toggle').click();
+      await sleep(300);
+      const row = [...document.querySelectorAll('.param')].find((r) => r.querySelector('.param-label')?.textContent === 'Aspect');
+      const select = row.querySelector('select');
+      const out = {};
+      for (const v of ['1.85', '1.33', '2.39']) {
+        select.value = v;
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+        let ratio = 0;
+        for (let k = 0; k < 25; k++) {
+          await sleep(100);
+          const c = document.querySelector('.stage canvas');
+          ratio = c.width / c.height;
+          if (Math.abs(ratio - Number(v)) < 0.02) break;
+        }
+        out[v] = ratio;
+      }
+      return out;
+    });
+    for (const [want, got] of Object.entries(ratios)) {
+      if (Math.abs(got - Number(want)) > 0.03) fail('framing', `asked for ${want}, the frame is ${got.toFixed(3)}`);
+    }
+    note('framing', Object.entries(ratios).map(([k, v]) => `${k} → ${v.toFixed(3)}`).join(' · '));
+  } catch (err) {
+    fail('framing', String(err));
   }
-  if (sections.coldRB - sections.warmRB < 10) {
-    failures.push(
-      `colour: Temperature barely moved blue-minus-red (warm ${sections.warmRB.toFixed(1)} vs cold ${sections.coldRB.toFixed(1)})`,
-    );
-  }
-  if (sections.glitchOnVsOff < 8) {
-    failures.push(
-      `glitch: turning the section on changed the picture by only ${sections.glitchOnVsOff.toFixed(1)} per pixel — it is not wired up`,
-    );
+  await page.close();
+}
+
+/* ================================================================== *
+ * 7. Every frame is a function of its number
+ *
+ * Nothing in the chain accumulates, so seeking cannot lose anything and an
+ * export that steps by seeking renders exactly what playback shows. Asserted
+ * by rendering the same frame after different histories.
+ * ================================================================== */
+
+{
+  const { page } = main;
+  const s = (await page.evaluate(() => window.__filmbox.presets?.['super8-1974'])) ?? {};
+  for (const backend of ['gpu', 'cpu']) {
+    const req = { backend, settings: s, source: { kind: 'texture', panPxPerSec: 90, cell: 6 }, width: 160, height: 110, srcWidth: 160, srcHeight: 110 };
+    const a = await probe(page, { ...req, frames: [3, 4, 5, 9] });
+    const b = await probe(page, { ...req, frames: [9] });
+    const d = meanAbsDiff(a.frames[3], b.frames[0]);
+    if (d > 0.01) fail('purity', `${backend}: frame 9 differs by ${d.toFixed(3)}/px depending on what was rendered before it`);
+    else note('purity', `${backend}: frame 9 identical whether rendered after 3, 4, 5 or on its own`);
   }
 }
 
-/* -------- 10. the guide and the information widgets -------- */
+/* ================================================================== *
+ * 8. The app runs the way the packaged build loads it
+ * ================================================================== */
 
-/*
- * The guide is the first thing a new user sees, so a regression that leaves it
- * stuck open, impossible to close, or never shown at all is a bad one. This
- * drives the whole lifecycle through the real controls: shown on first run,
- * closes, reopens from the header, remembers "don't show" across a reload, and
- * F1 brings it back.
- *
- * Then it opens a parameter's ⓘ and a section's ⓘ and asserts real text
- * appears, which is the half that check-help.mjs cannot see — the data can be
- * complete while the widget fails to render it.
- */
-
-const guide = await (async () => {
-  const p = await browser.newPage({ viewport: { width: 1400, height: 900 } });
-  const out = {
-    shownOnStart: false,
-    closed: false,
-    reopened: false,
-    hiddenAfterReload: false,
-    f1Reopened: false,
-    tubes: 0,
-    paramInfo: '',
-    sectionInfo: '',
-    error: null,
-  };
+{
+  const url = pathToFileURL(join(root, 'index.html')).href;
   try {
-    await p.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'load' });
-    await p.waitForTimeout(1500);
-
-    out.shownOnStart = (await p.$('.guide')) !== null;
-
-    // Close with the × and confirm it is gone.
-    await p.evaluate(() => document.querySelector('.guide-close')?.click());
-    await p.waitForTimeout(400);
-    out.closed = (await p.$('.guide')) === null;
-
-    // Reopen from the header.
-    await p.evaluate(() =>
-      [...document.querySelectorAll('button')].find((b) => b.textContent === 'Guide')?.click(),
-    );
-    await p.waitForTimeout(400);
-    out.reopened = (await p.$('.guide')) !== null;
-
-    // Count the reference tubes offered.
-    out.tubes = await p.evaluate(async () => {
-      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-      [...document.querySelectorAll('.guide-tabs button')]
-        .find((b) => b.textContent.includes('Reference'))
-        ?.click();
-      await sleep(250);
-      return document.querySelectorAll('.guide-tube').length;
+    const { page, noise } = await openPage(url);
+    await dropStill(page, `g.fillStyle = '#d8d8d8'; g.fillRect(0, 0, w, h);`, 320, 240);
+    const s = await settledStats(page, { timeout: 20000 });
+    const mounted = await page.evaluate(() => (document.getElementById('root')?.innerHTML || '').length);
+    if (mounted < 500) fail('packaged', `the app did not mount over file:// (root is ${mounted} chars)`);
+    if (s.lit < 0.3) fail('packaged', `mounted over file:// but the film is black (${(s.lit * 100).toFixed(1)}% lit)`);
+    // The worklet and its imported event clock have to load over file:// too.
+    const worklet = await page.evaluate(async () => {
+      try {
+        const ctx = new OfflineAudioContext(1, 128, 48000);
+        await ctx.audioWorklet.addModule(new URL('worklets/filmbox-dsp.js', document.baseURI).href);
+        return 'ok';
+      } catch (err) {
+        return String(err);
+      }
     });
+    if (worklet !== 'ok') fail('packaged', `the audio worklet did not load over file:// (${worklet})`);
+    for (const n of noise) fail('packaged', n);
+    note('packaged', `file:// mounted ${mounted} chars · ${(s.lit * 100).toFixed(1)}% lit · worklet ${worklet}`);
+    await page.close();
+  } catch (err) {
+    fail('packaged', String(err));
+  }
+}
 
-    // Tick "don't show", close, reload: it must stay shut.
-    await p.evaluate(() => {
+/* ================================================================== *
+ * 9. Every section actually reaches the picture
+ *
+ * A parameter can exist in the schema, move its slider, and never reach a
+ * shader. Each picture section is pushed hard from the same baseline and
+ * the render must change.
+ * ================================================================== */
+
+{
+  const { page } = main;
+  const baseline = { 'format.stock': 'vision3_250d', 'camera.weave': 0, 'projector.weave': 0 };
+  const cases = [
+    ['curve.gamma', 1.6],
+    ['curve.toe', 0.6],
+    ['curve.shoulder', -1],
+    ['curve.push', 2],
+    ['grain.amount', 3],
+    ['grain.size', 2.5],
+    ['halation.amount', 5],
+    ['halation.noBacking', true],
+    ['dye.saturation', 2],
+    ['dye.impurity', 2.5],
+    ['print.process', 'scan'],
+    ['print.stock', 'eastman5381'],
+    ['print.red', 35],
+    ['print.generations', 4],
+    ['print.bleachBypass', 1],
+    ['fade.years', 60],
+    ['exposure.stops', 1.5],
+    ['exposure.light', 'tungsten'],
+    ['exposure.filter85', true],
+    ['lens.resolution', 12],
+    ['lens.vignette', 2.5],
+    ['lens.chromatic', 40],
+    ['lens.flare', 0.2],
+    ['lens.distortion', 0.2],
+    ['anamorphic.enabled', true],
+    ['camera.weave', 80],
+    ['camera.flicker', 0.6],
+    ['projector.weave', 80],
+    ['projector.hotspot', 2],
+    ['projector.focus', 60],
+    ['projector.warmth', 1],
+    ['projector.framing', 0.3],
+    ['gatedirt.specks', 1],
+    ['gatedirt.hair', 1],
+    ['filmdirt.dust', 1],
+    ['filmdirt.fibres', 1],
+    ['scratch.rate', 1],
+    ['leak.rollFog', 2],
+    ['leak.edgeFog', 1],
+    ['decay.vinegar', 1],
+    ['decay.mould', 1],
+    ['decay.water', 1],
+    ['decay.flaking', 1],
+    ['decay.channelling', 1],
+    ['telecine.black', 0.08],
+    ['telecine.saturation', 0],
+    ['framing.overscan', 0.5],
+  ];
+  const req = { backend: 'gpu', source: { kind: 'bars' }, width: 288, height: 200, frames: [2] };
+  const ref = (await probe(page, { ...req, settings: baseline })).frames[0];
+  const quiet = [];
+  for (const [key, value] of cases) {
+    const f = (await probe(page, { ...req, settings: { ...baseline, [key]: value } })).frames[0];
+    const d = meanAbsDiff(ref, f);
+    // The baseline is deterministic — same frame, same seed — so anything wired
+    // changes it; sparse things like a speck change it only a little.
+    if (d < 0.1) quiet.push(`${key}=${value} (${d.toFixed(2)})`);
+  }
+  if (quiet.length) fail('sections', `these did not change the picture: ${quiet.join(', ')}`);
+  note('sections', `${cases.length - quiet.length}/${cases.length} picture parameters measurably reach the render`);
+}
+
+/* ================================================================== *
+ * 10. The guide and the information widgets
+ * ================================================================== */
+
+{
+  const { page } = await openPage(base, { guide: true });
+  const out = { shown: false, closed: false, reopened: false, films: 0, hidden: false, f1: false, param: '', section: '' };
+  try {
+    out.shown = (await page.$('.guide')) !== null;
+    await page.evaluate(() => document.querySelector('.guide-close')?.click());
+    await page.waitForSelector('.guide', { state: 'detached', timeout: 3000 }).catch(() => undefined);
+    out.closed = (await page.$('.guide')) === null;
+    await page.evaluate(() => [...document.querySelectorAll('button')].find((b) => b.textContent === 'Guide')?.click());
+    await page.waitForSelector('.guide', { timeout: 3000 }).catch(() => undefined);
+    out.reopened = (await page.$('.guide')) !== null;
+    await page.evaluate(() => [...document.querySelectorAll('.guide-tabs button')].find((b) => b.textContent.includes('Reference'))?.click());
+    await page.waitForSelector('.guide-tube', { timeout: 3000 }).catch(() => undefined);
+    out.films = await page.evaluate(() => document.querySelectorAll('.guide-tube').length);
+    await page.evaluate(() => {
       const box = document.querySelector('.guide-foot .check input');
       if (box && !box.checked) box.click();
     });
-    await p.waitForTimeout(250);
-    await p.evaluate(() => document.querySelector('.guide-close')?.click());
-    await p.reload({ waitUntil: 'load' });
-    await p.waitForTimeout(1500);
-    out.hiddenAfterReload = (await p.$('.guide')) === null;
-
-    // F1 brings it back, and closes it again.
-    await p.keyboard.press('F1');
-    await p.waitForTimeout(400);
-    out.f1Reopened = (await p.$('.guide')) !== null;
-    await p.keyboard.press('Escape');
-    await p.waitForTimeout(400);
-
-    // Information widgets.
-    const info = await p.evaluate(async () => {
+    await page.evaluate(() => document.querySelector('.guide-close')?.click());
+    await page.reload({ waitUntil: 'load' });
+    await page.waitForSelector('.stage canvas', { timeout: 10000 });
+    out.hidden = (await page.$('.guide')) === null;
+    await page.keyboard.press('F1');
+    await page.waitForSelector('.guide', { timeout: 3000 }).catch(() => undefined);
+    out.f1 = (await page.$('.guide')) !== null;
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.guide', { state: 'detached', timeout: 3000 }).catch(() => undefined);
+    const info = await page.evaluate(async () => {
       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-      const sect = (t) =>
-        [...document.querySelectorAll('.group')].find(
-          (g) => g.querySelector('.group-title')?.textContent === t,
-        );
-      [...document.querySelectorAll('.tabs button')]
-        .find((b) => b.textContent.trim() === 'Tube')
-        ?.click();
-      await sleep(400);
-      const beam = sect('Beam & Scanlines');
-      if (!beam) throw new Error('no Beam & Scanlines section');
-      beam.querySelector('.group-info-btn').click();
-      if (!beam.classList.contains('open')) beam.querySelector('.group-toggle').click();
-      await sleep(400);
-
-      const row = [...document.querySelectorAll('.param')].find(
-        (r) => r.querySelector('.param-label')?.textContent === 'Beam blooming',
-      );
-      if (!row) throw new Error('no Beam blooming parameter');
+      [...document.querySelectorAll('.tabs button')].find((b) => b.textContent.trim() === 'Stock')?.click();
+      await sleep(300);
+      const sect = [...document.querySelectorAll('.group')].find((g) => g.querySelector('.group-title')?.textContent === 'Characteristic Curve');
+      if (!sect) throw new Error('no Characteristic Curve section');
+      sect.querySelector('.group-info-btn').click();
+      if (!sect.classList.contains('open')) sect.querySelector('.group-toggle').click();
+      await sleep(300);
+      const row = [...document.querySelectorAll('.param')].find((r) => r.querySelector('.param-label')?.textContent === 'Toe position');
+      if (!row) throw new Error('no Toe position parameter');
       row.querySelector('.param-info-btn').click();
-      await sleep(400);
-
+      await sleep(300);
       return {
         section: document.querySelector('.group-info')?.textContent?.trim() ?? '',
         param: row.querySelector('.param-info')?.textContent?.trim() ?? '',
       };
     });
-    out.sectionInfo = info.section;
-    out.paramInfo = info.param;
+    out.param = info.param;
+    out.section = info.section;
   } catch (err) {
-    out.error = String(err);
+    fail('guide', String(err));
   }
-  await p.close();
-  return out;
-})();
+  if (!out.shown) fail('guide', 'not shown on first run');
+  if (!out.closed) fail('guide', 'the close button did not close it');
+  if (!out.reopened) fail('guide', 'the header button did not reopen it');
+  if (out.films < 10) fail('guide', `only ${out.films} reference films listed`);
+  if (!out.hidden) fail('guide', '"don\'t show on startup" did not survive a reload');
+  if (!out.f1) fail('guide', 'F1 did not reopen it');
+  if (out.param.length < 80) fail('guide', `a parameter's ⓘ revealed only ${out.param.length} characters`);
+  if (out.section.length < 150) fail('guide', `a section's ⓘ revealed only ${out.section.length} characters`);
+  note('guide', `shown, closes, reopens, ${out.films} films, remembered, F1 · ⓘ ${out.param.length} / ${out.section.length} chars`);
+  await page.close();
+}
 
-if (guide.error) {
-  failures.push(`guide: ${guide.error}`);
-} else {
-  if (!guide.shownOnStart) failures.push('guide: not shown on first run');
-  if (!guide.closed) failures.push('guide: the close button did not close it');
-  if (!guide.reopened) failures.push('guide: the header button did not reopen it');
-  if (guide.tubes < 5) {
-    failures.push(`guide: only ${guide.tubes} reference tubes listed, expected all of them`);
+/* ================================================================== *
+ * 11. The film, measured
+ * ================================================================== */
+
+const { page: lab } = main;
+const G = { width: 578, height: 400, srcWidth: 578, srcHeight: 400 };
+
+/**
+ * Slope of log2(output light) against log2(exposure), across a ramp. With the
+ * telecine off, video log-light is an exact straight line in film density, so
+ * this slope is the characteristic curve's own, read off the screen.
+ */
+async function curveProfile(settings, stops, window = 0.8) {
+  const res = await probe(lab, {
+    backend: 'gpu',
+    settings: { ...CLEAN, ...settings, 'exposure.headroom': 0, 'exposure.stops': stops },
+    source: { kind: 'ramp', stops: 16 },
+    ...G,
+    frames: [0],
+  });
+  const f = res.frames[0];
+  const W = res.width;
+  const pts = [];
+  for (let x = 0; x < W; x++) {
+    let s = 0;
+    for (let y = 180; y < 220; y++) s += f.rgb[(y * W + x) * 3 + 1];
+    s /= 40;
+    const u = 0.5 + ((x + 0.5) / W - 0.5) * window;
+    pts.push({ ev: -16 * (1 - u) + stops - Math.log2(0.18), out: Math.log2(Math.max(srgbToLinear(s), 1e-6)), code: s });
   }
-  if (!guide.hiddenAfterReload) {
-    failures.push('guide: "don\'t show on startup" did not survive a reload');
+  // Least-squares slope over 1.4-stop windows.
+  const slopes = [];
+  const span = Math.round(W * (1.4 / (16 * window)));
+  for (let i = 0; i + span < W; i += Math.max(4, Math.floor(span / 3))) {
+    const seg = pts.slice(i, i + span).filter((p) => p.code > 3 && p.code < 252);
+    if (seg.length < span * 0.8) continue;
+    const mx = seg.reduce((a, p) => a + p.ev, 0) / seg.length;
+    const my = seg.reduce((a, p) => a + p.out, 0) / seg.length;
+    let sxy = 0;
+    let sxx = 0;
+    for (const p of seg) {
+      sxy += (p.ev - mx) * (p.out - my);
+      sxx += (p.ev - mx) ** 2;
+    }
+    slopes.push({ ev: mx, slope: sxy / sxx, code: seg[Math.floor(seg.length / 2)].code });
   }
-  if (!guide.f1Reopened) failures.push('guide: F1 did not reopen it');
-  if (guide.paramInfo.length < 80) {
-    failures.push(
-      `guide: a parameter's ⓘ revealed only ${guide.paramInfo.length} characters — the widget is not showing its help`,
-    );
-  }
-  if (guide.sectionInfo.length < 150) {
-    failures.push(
-      `guide: a section's ⓘ revealed only ${guide.sectionInfo.length} characters`,
-    );
+  return slopes;
+}
+
+const at = (profile, ev) => profile.reduce((b, p) => (Math.abs(p.ev - ev) < Math.abs(b.ev - ev) ? p : b));
+
+/* ---- 11a. the characteristic curve has a toe and a shoulder ---- */
+{
+  const stage = 'curve';
+  try {
+    const shadowsLin = await curveProfile({ 'curve.enabled': false }, 1);
+    const linMid = at(shadowsLin, -1).slope;
+    const linLow = at(shadowsLin, -5).slope;
+    if (Math.abs(linMid - 1) > 0.12 || Math.abs(linLow - 1) > 0.25) {
+      fail(stage, `the straight-line control is not straight (slope ${linLow.toFixed(2)} low, ${linMid.toFixed(2)} mid) — the measurement is wrong, not the film`);
+    }
+    const rows = [];
+    for (const [name, stock, shoulderEv] of [
+      ['Kodachrome', 'kodachrome40', 2.2],
+      ['Vision3 + print', 'vision3_250d', 3.5],
+    ]) {
+      const shadows = await curveProfile({ 'format.stock': stock }, 1);
+      const highs = await curveProfile({ 'format.stock': stock }, 4);
+      const mid = Math.max(...shadows.filter((p) => p.ev > -2 && p.ev < 1).map((p) => p.slope));
+      const toe = at(shadows, -5.5).slope;
+      const shoulder = at(highs, shoulderEv).slope;
+      if (!(toe < 0.5 * mid)) fail(stage, `${name}: no toe — slope ${toe.toFixed(2)} at −5.5 stops against ${mid.toFixed(2)} mid`);
+      if (!(shoulder < 0.5 * mid)) fail(stage, `${name}: no shoulder — slope ${shoulder.toFixed(2)} at +${shoulderEv} stops against ${mid.toFixed(2)} mid`);
+      rows.push(`${name} ${toe.toFixed(2)} / ${mid.toFixed(2)} / ${shoulder.toFixed(2)}`);
+    }
+    note(stage, `slope toe / mid / shoulder: linear ${linLow.toFixed(2)} / ${linMid.toFixed(2)} · ${rows.join(' · ')}`);
+  } catch (err) {
+    fail(stage, String(err));
   }
 }
 
-/* -------- 11. the tape engine -------- */
-
-/*
- * The second emulator: composite encode and decode, and the videotape. Almost
- * nothing in it is drawn on, so the assertions here are about emergent
- * behaviour rather than about pixels being different.
- *
- *   - Cross-colour: a pure greyscale stripe pattern must come back coloured,
- *     because fine luma detail lands in the chroma band. Box demodulation must
- *     leave substantially more of it than a 2-line comb, which is the entire
- *     reason those filters existed.
- *   - Dot crawl must actually crawl: with a 180 degree scanline phase shift the
- *     pattern inverts frame to frame, and at 0 degrees it stands still.
- *
- * The crawl measurement is taken 1:1 on a crop. The subcarrier runs at 227.5
- * cycles across a line, so downsampling the frame aliases the pattern away and
- * a whole-frame comparison shows nothing whether it works or not.
- */
-
-const tapeEngine = await (async () => {
-  const p = await browser.newPage({ viewport: { width: 1500, height: 950 } });
-  const out = { rainbowBox: 0, rainbowComb: 0, combVsBox: 0, crawlMoves: 0, staticPhase: 0, spVsEp: 0, tabs: [], error: null };
+/* ---- 11b. reversal clips sooner and harder than negative ---- */
+{
+  const stage = 'latitude';
   try {
-    await p.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'load' });
-    await p.waitForTimeout(1500);
-    const r = await p.evaluate(async () => {
-      const sleep = (ms) => new Promise((x) => setTimeout(x, ms));
-      const setInput = (el, v) => {
-        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, String(v));
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-      };
-      document.querySelector('.guide-close')?.click();
-      await sleep(400);
-      const tabs = [...document.querySelectorAll('.tabs button')].map((b) => b.textContent.trim());
+    // Clear film has to land below video white here, or the film's own
+    // highlight end and the display's clip coincide and cannot be told apart.
+    const visible = { 'engine.gate': true, 'camera.enabled': false, 'projector.enabled': false, 'telecine.white': 0.7 };
+    const knee = async (stock) => {
+      const p = await curveProfile({ 'format.stock': stock, ...visible }, 4);
+      const ups = p.filter((q) => q.ev > -1);
+      const peak = Math.max(...ups.map((q) => q.slope));
+      const peakAt = ups.find((q) => q.slope === peak).ev;
+      const after = ups.filter((q) => q.ev > peakAt);
+      const cross = (frac) => after.find((q) => q.slope < frac * peak)?.ev ?? 99;
+      return { at80: cross(0.8), at20: cross(0.2) };
+    };
+    const rev = await knee('kodachrome40');
+    const neg = await knee('vision3_250d');
+    const revWidth = rev.at20 - rev.at80;
+    const negWidth = neg.at20 - neg.at80;
+    if (!(rev.at20 < neg.at20 - 1)) {
+      fail(stage, `reversal does not clip sooner: its highlights flatten at +${rev.at20.toFixed(1)} stops, the negative's at +${neg.at20.toFixed(1)}`);
+    }
+    if (!(revWidth < negWidth)) {
+      fail(stage, `reversal does not clip harder: its shoulder spans ${revWidth.toFixed(1)} stops, the negative's ${negWidth.toFixed(1)}`);
+    }
+    note(stage, `highlights flatten at +${rev.at20.toFixed(1)} stops on Kodachrome over ${revWidth.toFixed(1)} stops, +${neg.at20 > 50 ? '>' + '6' : neg.at20.toFixed(1)} on Vision3 over ${negWidth > 50 ? '>3' : negWidth.toFixed(1)}`);
+  } catch (err) {
+    fail(stage, String(err));
+  }
+}
 
-      // Colour bars over fine single-pixel greyscale stripes: the pattern that
-      // provokes cross-colour hardest.
-      const c = document.createElement('canvas');
-      c.width = 384;
-      c.height = 288;
-      const g = c.getContext('2d');
-      g.fillStyle = '#000';
-      g.fillRect(0, 0, 384, 288);
-      ['#ffffff', '#ffff00', '#00ffff', '#00ff00', '#ff00ff', '#ff0000', '#0000ff'].forEach((col, i) => {
-        g.fillStyle = col;
-        g.fillRect((i * 384) / 7, 0, 384 / 7 + 1, 180);
+/* ---- 11c. grain is fixed to the film, not to the picture ---- */
+{
+  const stage = 'grain/gate';
+  try {
+    // Flat grey: the only structure is grain. Same film frame, same seed.
+    const grainy = {
+      'engine.lens': false,
+      'halation.enabled': false,
+      'grain.amount': 2.5,
+      'camera.enabled': true,
+      'camera.flicker': 0,
+      'projector.enabled': true,
+      'projector.weave': 0,
+      'projector.hotspot': 0,
+      'framing.overscan': -0.2,
+      'telecine.enabled': false,
+    };
+    const W = 200;
+    const H = 140;
+    const req = { backend: 'gpu', source: { kind: 'grey', level: 0.5 }, width: W, height: H, srcWidth: W, srcHeight: H, frames: [5] };
+    const grain = async (extra) => highpass(luma((await probe(lab, { ...req, settings: { ...grainy, ...extra } })).frames[0], W, H), W, H, 2);
+    const still = await grain({ 'camera.weave': 0 });
+    // The camera's registration error moves the image relative to the film:
+    // the grain must stay exactly where it was.
+    const camera = await grain({ 'camera.weave': 80 });
+    const cam = bestShift(still, camera, W, H, 4);
+    // The projector moves the strip: grain goes with it. Framing by 0.02
+    // frames on Super 8 is 0.085 mm, which at this size is a known shift.
+    const shiftMm = 0.02 * 4.234;
+    const visH = 4.01 * 0.8;
+    const expectPx = Math.round((shiftMm / visH) * H);
+    const proj = await grain({ 'camera.weave': 0, 'projector.framing': 0.02 });
+    const pr = bestShift(still, proj, W, H, 6);
+    if (!(cam.dx === 0 && cam.dy === 0 && cam.c > 0.9)) {
+      fail(stage, `grain moved with the camera's registration error (best match at ${cam.dx},${cam.dy}, r=${cam.c.toFixed(2)}) — it is not on the film`);
+    }
+    if (!(Math.abs(Math.abs(pr.dy) - expectPx) <= 1 && pr.dx === 0 && pr.c > 0.6)) {
+      fail(stage, `grain did not travel with the strip in the projector: best match at ${pr.dx},${pr.dy} (r=${pr.c.toFixed(2)}), expected 0,±${expectPx}`);
+    }
+    note(stage, `camera weave: grain stays (r=${cam.c.toFixed(2)} at 0,0) · projector moves strip ${expectPx}px: grain follows (r=${pr.c.toFixed(2)} at ${pr.dx},${pr.dy})`);
+  } catch (err) {
+    fail(stage, String(err));
+  }
+}
+
+/* ---- 11d. grain scales with the format ---- */
+{
+  const stage = 'grain/size';
+  try {
+    const W = 240;
+    const H = 166;
+    const power = async (gauge) => {
+      const f = (await probe(lab, {
+        backend: 'gpu',
+        settings: { 'engine.gate': false, 'engine.lens': false, 'halation.enabled': false, 'format.gauge': gauge, 'format.stock': 'vision3_250d', 'framing.aspect': '1.44' },
+        source: { kind: 'grey', level: 0.5 },
+        width: W,
+        height: H,
+        srcWidth: W,
+        srcHeight: H,
+        frames: [0],
+      })).frames[0];
+      const hp = highpass(luma(f, W, H), W, H, 3);
+      return stdOf(hp, W, H) ** 2;
+    };
+    const s8 = await power('super8');
+    const m16 = await power('mm16');
+    const m35 = await power('mm35');
+    if (!(s8 > 3 * m35 && s8 > m16 && m16 > m35)) {
+      fail(stage, `the same stock is not grainier on a smaller frame: power ${s8.toFixed(2)} Super 8, ${m16.toFixed(2)} 16 mm, ${m35.toFixed(2)} 35 mm`);
+    }
+    note(stage, `Vision3 250D grain power: Super 8 ${s8.toFixed(2)} · 16 mm ${m16.toFixed(2)} · 35 mm ${m35.toFixed(2)} (${(s8 / m35).toFixed(1)}×)`);
+  } catch (err) {
+    fail(stage, String(err));
+  }
+}
+
+/* ---- 11e. gate dirt persists; film dirt lasts one frame ---- */
+{
+  const stage = 'dirt';
+  try {
+    const W = 200;
+    const H = 140;
+    const quiet = {
+      'engine.lens': false,
+      'grain.enabled': false,
+      'halation.enabled': false,
+      'camera.weave': 0,
+      'camera.flicker': 0,
+      'projector.weave': 20,
+      'projector.hotspot': 0,
+      'format.stock': 'kodachrome40',
+    };
+    const specks = async (extra) => {
+      const res = await probe(lab, {
+        backend: 'gpu',
+        settings: { ...quiet, ...extra },
+        source: { kind: 'grey', level: 0.55 },
+        width: W,
+        height: H,
+        srcWidth: W,
+        srcHeight: H,
+        frames: [0, 1, 2, 3, 4, 5, 6, 7],
       });
-      g.fillStyle = '#fff';
-      for (let x = 0; x < 384; x += 3) g.fillRect(x, 190, 1, 98);
-      const blob = await new Promise((x) => c.toBlob(x, 'image/png'));
-      const dt = new DataTransfer();
-      dt.items.add(new File([blob], 'bars.png', { type: 'image/png' }));
-      window.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true }));
-      await sleep(1800);
+      return res.frames.map((f) => {
+        const l = luma(f, W, H);
+        const sorted = [...l].sort((a, b) => a - b);
+        const med = sorted[Math.floor(sorted.length / 2)];
+        const mask = new Uint8Array(W * H);
+        for (let i = 0; i < l.length; i++) if (l[i] < med - 25) mask[i] = 1;
+        return mask;
+      });
+    };
+    const jaccard = (a, b) => {
+      let i = 0;
+      let u = 0;
+      for (let k = 0; k < a.length; k++) {
+        if (a[k] && b[k]) i++;
+        if (a[k] || b[k]) u++;
+      }
+      return u ? i / u : 1;
+    };
+    const avgOverlap = (masks) => {
+      let s = 0;
+      for (let k = 1; k < masks.length; k++) s += jaccard(masks[k - 1], masks[k]);
+      return s / (masks.length - 1);
+    };
+    const gate = await specks({ 'gatedirt.specks': 1, 'gatedirt.life': 30 });
+    const film = await specks({ 'filmdirt.dust': 1 });
+    const gateCount = gate[0].reduce((a, b) => a + b, 0);
+    const filmCount = film[0].reduce((a, b) => a + b, 0);
+    const go = avgOverlap(gate);
+    const fo = avgOverlap(film);
+    if (gateCount < 20 || filmCount < 20) fail(stage, `not enough dirt to measure (${gateCount} gate px, ${filmCount} film px)`);
+    if (!(go > 0.8)) fail(stage, `gate dirt did not persist from frame to frame (overlap ${go.toFixed(2)})`);
+    if (!(fo < 0.15)) fail(stage, `film dirt persisted from frame to frame (overlap ${fo.toFixed(2)}) — it should last one frame`);
+    note(stage, `frame-to-frame overlap: gate grit ${go.toFixed(2)} (stays put while the strip weaves) · film dust ${fo.toFixed(2)}`);
+  } catch (err) {
+    fail(stage, String(err));
+  }
+}
 
-      const app = document.querySelector('.stage canvas');
-      const probe = document.createElement('canvas');
-      probe.width = 240;
-      probe.height = 180;
-      const pg = probe.getContext('2d', { willReadFrequently: true });
-      const grab = () => {
-        pg.drawImage(app, 0, 0, probe.width, probe.height);
-        return pg.getImageData(0, 0, probe.width, probe.height).data;
-      };
-      const stripeSat = () => {
-        const d = grab();
-        let sat = 0;
+/* ---- 11f. polarity: dirt on the negative prints white ---- */
+{
+  const stage = 'polarity';
+  try {
+    const W = 200;
+    const H = 140;
+    const extreme = async (extra) => {
+      const f = (await probe(lab, {
+        backend: 'gpu',
+        settings: { 'engine.lens': false, 'grain.enabled': false, 'camera.weave': 0, 'projector.weave': 0, 'filmdirt.dust': 1, ...extra },
+        source: { kind: 'grey', level: 0.45 },
+        width: W,
+        height: H,
+        srcWidth: W,
+        srcHeight: H,
+        frames: [1],
+      })).frames[0];
+      const l = luma(f, W, H);
+      const sorted = [...l].sort((a, b) => a - b);
+      const med = sorted[Math.floor(sorted.length / 2)];
+      let dark = 0;
+      let bright = 0;
+      for (const v of l) {
+        if (v < med - 30) dark++;
+        if (v > med + 30) bright++;
+      }
+      return { dark, bright };
+    };
+    const reversal = await extreme({ 'format.stock': 'kodachrome40' });
+    const printed = await extreme({ 'format.stock': 'vision3_250d', 'filmdirt.negative': 1 });
+    if (!(reversal.dark > 10 * Math.max(1, reversal.bright))) fail(stage, `dust on reversal is not dark (${reversal.dark} dark, ${reversal.bright} bright px)`);
+    if (!(printed.bright > 10 * Math.max(1, printed.dark))) fail(stage, `dust on a printed negative is not white (${printed.bright} bright, ${printed.dark} dark px)`);
+    note(stage, `dust on reversal: ${reversal.dark} dark px · on a negative, printed: ${printed.bright} white px`);
+  } catch (err) {
+    fail(stage, String(err));
+  }
+}
+
+/* ---- 11g. halation is red ---- */
+{
+  const stage = 'halation';
+  try {
+    const W = 240;
+    const H = 166;
+    const f = (await probe(lab, {
+      backend: 'gpu',
+      settings: { 'engine.gate': false, 'engine.lens': false, 'grain.enabled': false, 'format.stock': 'vision3_500t', 'halation.amount': 4 },
+      source: { kind: 'bars' },
+      width: W,
+      height: H,
+      srcWidth: W,
+      srcHeight: H,
+      frames: [0],
+    })).frames[0];
+    // Just above the white box, in what should be black.
+    const x0 = Math.round(W * 0.12);
+    const x1 = Math.round(W * 0.25);
+    const y = Math.round(H * 0.79);
+    let r = 0;
+    let g = 0;
+    let b = 0;
+    for (let x = x0; x < x1; x++) {
+      const i = (y * W + x) * 3;
+      r += f.rgb[i];
+      g += f.rgb[i + 1];
+      b += f.rgb[i + 2];
+    }
+    const n = x1 - x0;
+    r /= n;
+    g /= n;
+    b /= n;
+    if (!(r > g + 4 && g >= b)) fail(stage, `the glow round a highlight is not red-orange (R ${r.toFixed(0)}, G ${g.toFixed(0)}, B ${b.toFixed(0)})`);
+    note(stage, `glow beside a white patch on black: R ${r.toFixed(0)} · G ${g.toFixed(0)} · B ${b.toFixed(0)}`);
+  } catch (err) {
+    fail(stage, String(err));
+  }
+}
+
+/* ---- 11h. fading is per-dye, towards magenta ---- */
+{
+  const stage = 'fading';
+  try {
+    const W = 80;
+    const H = 56;
+    const grey = async (years) => {
+      const f = (await probe(lab, {
+        backend: 'gpu',
+        settings: { 'engine.gate': false, 'engine.lens': false, 'grain.enabled': false, 'format.gauge': 'mm35', 'format.stock': 'eastman5247', 'print.stock': 'eastman5381', 'fade.years': years, 'fade.storage': 'warm' },
+        source: { kind: 'grey', level: 0.46 },
+        width: W,
+        height: H,
+        srcWidth: W,
+        srcHeight: H,
+        frames: [0],
+      })).frames[0];
+      return f.mean;
+    };
+    const fresh = await grey(0);
+    const old = await grey(40);
+    const chroma = (c) => [c[0] - c[1], c[2] - c[1]];
+    const [freshR, freshB] = chroma(fresh);
+    const [oldR, oldB] = chroma(old);
+    if (Math.abs(freshR) > 6 || Math.abs(freshB) > 6) fail(stage, `a fresh print of grey is not grey (${fresh.map((v) => v.toFixed(0)).join(',')})`);
+    if (!(oldR > 15 && oldB > 5)) {
+      fail(stage, `forty warm years did not turn grey magenta: R−G ${oldR.toFixed(1)}, B−G ${oldB.toFixed(1)} (${old.map((v) => v.toFixed(0)).join(',')})`);
+    }
+    note(stage, `5381 grey: fresh ${fresh.map((v) => v.toFixed(0)).join(',')} → 40 warm years ${old.map((v) => v.toFixed(0)).join(',')} (R−G +${oldR.toFixed(0)}, B−G +${oldB.toFixed(0)})`);
+  } catch (err) {
+    fail(stage, String(err));
+  }
+}
+
+/* ---- 11i. film frames are held: 18 fps is 18 pictures a second ---- */
+{
+  const stage = 'hold';
+  try {
+    const W = 120;
+    const H = 84;
+    const res = await probe(lab, {
+      backend: 'gpu',
+      settings: { 'engine.gate': false, 'engine.lens': false, 'grain.enabled': false, 'framing.fps': '59.94' },
+      source: { kind: 'texture', panPxPerSec: 60, cell: 4 },
+      width: W,
+      height: H,
+      srcWidth: W,
+      srcHeight: H,
+      frames: Array.from({ length: 60 }, (_, i) => i),
+    });
+    let changes = 0;
+    for (let i = 1; i < res.frames.length; i++) if (meanAbsDiff(res.frames[i - 1], res.frames[i]) > 0.5) changes++;
+    // 60 output frames at 59.94 fps is just over a second: 18 film frames.
+    if (Math.abs(changes - 17) > 1) fail(stage, `${changes + 1} distinct pictures in 60 frames of 59.94 fps video, expected 18 — film frames are not being held`);
+    note(stage, `${changes + 1} distinct pictures in one second of 59.94 fps video from 18 fps film`);
+  } catch (err) {
+    fail(stage, String(err));
+  }
+}
+
+/* ---- 11j. 3:2 pulldown ---- */
+{
+  const stage = 'pulldown';
+  try {
+    const W = 64;
+    const H = 48;
+    const settings = {
+      'engine.lens': false,
+      'grain.enabled': false,
+      'halation.enabled': false,
+      'camera.enabled': false,
+      'projector.enabled': false,
+      'format.gauge': 'mm16',
+      'format.fps': '24',
+      'framing.fps': '29.97',
+      'telecine.fields': true,
+      'telecine.fieldOrder': 'upper',
+    };
+    const res = await probe(lab, { backend: 'gpu', settings, source: { kind: 'counter' }, width: W, height: H, srcWidth: W, srcHeight: H, frames: Array.from({ length: 20 }, (_, i) => i) });
+    // Each field's level, read from its own lines.
+    const fields = [];
+    for (const f of res.frames) {
+      for (const parity of [0, 1]) {
+        let s = 0;
         let n = 0;
-        for (let y = Math.floor(probe.height * 0.68); y < Math.floor(probe.height * 0.95); y++) {
-          for (let x = 20; x < probe.width - 20; x++) {
-            const i = (y * probe.width + x) * 4;
-            const mx = Math.max(d[i], d[i + 1], d[i + 2]);
-            const mn = Math.min(d[i], d[i + 1], d[i + 2]);
-            if (mx > 26) {
-              sat += (mx - mn) / mx;
-              n++;
-            }
+        for (let y = parity; y < H; y += 2) {
+          for (let x = 8; x < W - 8; x++) {
+            s += f.rgb[(y * W + x) * 3 + 1];
+            n++;
           }
         }
-        return n ? sat / n : 0;
+        fields.push(s / n);
+      }
+    }
+    // Runs of fields showing the same film frame.
+    const runs = [];
+    let len = 1;
+    for (let i = 1; i < fields.length; i++) {
+      if (Math.abs(fields[i] - fields[i - 1]) < 2) len++;
+      else {
+        runs.push(len);
+        len = 1;
+      }
+    }
+    const inner = runs.slice(1);
+    const pattern = inner.join('');
+    const ok = inner.length >= 6 && inner.every((r) => r === 2 || r === 3) && !/22|33/.test(pattern);
+    const mixed = res.frames.filter((f) => {
+      let a = 0;
+      let b = 0;
+      for (let x = 8; x < W - 8; x++) {
+        a += f.rgb[(20 * W + x) * 3 + 1];
+        b += f.rgb[(21 * W + x) * 3 + 1];
+      }
+      return Math.abs(a - b) / (W - 16) > 2;
+    }).length;
+    if (!ok) fail(stage, `field cadence is ${pattern}, not alternating 3 and 2`);
+    if (mixed !== 8) fail(stage, `${mixed} of 20 video frames mix two film frames, expected 8 (two in every five)`);
+    // Without fields the cadence is still uneven: some film frames get two video frames.
+    const prog = await probe(lab, { backend: 'gpu', settings: { ...settings, 'telecine.fields': false }, source: { kind: 'counter' }, width: W, height: H, srcWidth: W, srcHeight: H, frames: Array.from({ length: 10 }, (_, i) => i) });
+    const holds = [];
+    let h = 1;
+    for (let i = 1; i < prog.frames.length; i++) {
+      if (meanAbsDiff(prog.frames[i - 1], prog.frames[i]) < 0.5) h++;
+      else {
+        holds.push(h);
+        h = 1;
+      }
+    }
+    if (new Set(holds).size < 2) fail(stage, `progressive transfer holds every film frame equally (${holds.join(',')}) — 24 on 29.97 cannot`);
+    note(stage, `fields ${pattern} · ${mixed}/20 frames combed · progressive holds ${holds.join(',')}`);
+  } catch (err) {
+    fail(stage, String(err));
+  }
+}
+
+/* ---- 11k. a splice is a jump and a pop, from the same event ---- */
+{
+  const stage = 'splice';
+  try {
+    const r = await lab.evaluate(async (workletBase) => {
+      const ev = await import(`${workletBase}film-events.js`);
+      const seed = 1337;
+      const rate = 12;
+      const fps = 18;
+      const frames = [];
+      for (let n = 1; n < 18 * 6; n++) if (ev.spliceAt(n, seed, rate, fps)) frames.push(n);
+      // The sound: an optical track through the worklet, silence in.
+      const sr = 48000;
+      const ctx = new OfflineAudioContext(1, sr * 6, sr);
+      await ctx.audioWorklet.addModule(`${workletBase}filmbox-dsp.js`);
+      const params = {
+        'film.cameraFps': fps,
+        'film.projectorFps': fps,
+        'audio.enabled': true,
+        'track.code': 1,
+        'optical.enabled': true,
+        'optical.noise': -120,
+        'optical.crackle': 0,
+        'optical.exciterHum': -120,
+        'playback.enabled': false,
+        'splice.enabled': true,
+        'splice.rate': rate,
+        'link.enabled': true,
+        'link.spliceToPop': 1,
+        'link.dirtToCrackle': 0,
+      };
+      const track = new AudioWorkletNode(ctx, 'film-track', { numberOfInputs: 2, outputChannelCount: [1], processorOptions: { params, seed } });
+      track.connect(ctx.destination);
+      const buf = await ctx.startRendering();
+      const d = buf.getChannelData(0);
+      const onsets = [];
+      for (let i = 0; i < d.length; i++) {
+        if (Math.abs(d[i]) > 0.05 && (onsets.length === 0 || i / sr - onsets[onsets.length - 1] > 0.3)) onsets.push(i / sr);
+      }
+      return { frames, onsets };
+    }, `${base}worklets/`);
+    if (r.frames.length < 2) throw new Error(`only ${r.frames.length} splices in six seconds at 12/min — the event clock is off`);
+    // Picture: the splice frame jumps.
+    const W = 120;
+    const H = 84;
+    const settings = { 'engine.lens': false, 'grain.enabled': false, 'camera.enabled': false, 'projector.weave': 0, 'splice.rate': 12, 'splice.jump': 1 };
+    const n = r.frames[0];
+    const frames = await probe(lab, { backend: 'gpu', settings, source: { kind: 'bars' }, width: W, height: H, srcWidth: W, srcHeight: H, frames: [n - 3, n - 2, n] });
+    const steady = meanAbsDiff(frames.frames[0], frames.frames[1]);
+    const jump = meanAbsDiff(frames.frames[1], frames.frames[2]);
+    if (!(jump > steady + 5)) fail(stage, `the picture did not jump on the splice at frame ${n} (${jump.toFixed(1)}/px against ${steady.toFixed(1)})`);
+    const times = r.frames.map((k) => k / 18);
+    const unmatched = times.filter((t) => !r.onsets.some((o) => Math.abs(o - t) < 1 / 18 + 0.01));
+    if (unmatched.length) fail(stage, `splices at ${unmatched.map((t) => t.toFixed(2)).join(', ')} s made no sound (pops at ${r.onsets.map((t) => t.toFixed(2)).join(', ')})`);
+    if (r.onsets.length > times.length + 1) fail(stage, `${r.onsets.length} pops for ${times.length} splices`);
+    note(stage, `splices on frames ${r.frames.join(', ')} · picture jumps ${jump.toFixed(1)}/px · pops at ${r.onsets.map((t) => t.toFixed(2)).join(', ')} s`);
+  } catch (err) {
+    fail(stage, String(err));
+  }
+}
+
+/* ================================================================== *
+ * 12. The CPU backend agrees with the GPU
+ * ================================================================== */
+
+{
+  const stage = 'cpu';
+  try {
+    const W = 160;
+    const H = 110;
+    const req = { source: { kind: 'bars' }, width: W, height: H, srcWidth: 320, srcHeight: 240, frames: [4] };
+    const clean = { 'grain.enabled': false, 'engine.gate': false };
+    const g1 = (await probe(lab, { ...req, backend: 'gpu', settings: clean })).frames[0];
+    const c1 = (await probe(lab, { ...req, backend: 'cpu', settings: clean })).frames[0];
+    const perPixel = meanAbsDiff(g1, c1);
+    if (perPixel > 1.5) fail(stage, `without grain the two backends differ by ${perPixel.toFixed(2)}/px`);
+    const flagship = (await lab.evaluate(() => window.__filmbox.presets?.['super8-1974'])) ?? {};
+    const g2 = await probe(lab, { ...req, backend: 'gpu', settings: flagship });
+    const c2 = await probe(lab, { ...req, backend: 'cpu', settings: flagship });
+    const meanGap = Math.max(...g2.frames[0].mean.map((v, i) => Math.abs(v - c2.frames[0].mean[i])));
+    if (meanGap > 3) fail(stage, `with the flagship look the backends' means differ by ${meanGap.toFixed(1)}`);
+    if (c2.backend !== 'cpu') fail(stage, 'asked for the CPU backend and did not get it');
+    note(stage, `${perPixel.toFixed(2)}/px apart without grain · flagship means within ${meanGap.toFixed(1)} · CPU ${c2.ms.toFixed(0)} ms vs GPU ${g2.ms.toFixed(0)} ms`);
+  } catch (err) {
+    fail(stage, String(err));
+  }
+  // And the toggle in the header really swaps the backend.
+  const { page } = await openPage();
+  try {
+    await dropStill(page, BARS);
+    await settledStats(page);
+    await page.click('.backend-toggle button[data-backend="cpu"]');
+    const s = await settledStats(page, { timeout: 30000 });
+    const ctx = await page.evaluate(() => {
+      const c = document.querySelector('.stage canvas');
+      return c.getContext('2d') ? '2d' : 'webgl';
+    });
+    if (ctx !== '2d') fail(stage, 'switching to CPU did not replace the WebGL canvas');
+    if (s.lit < 0.3) fail(stage, `the CPU backend drew a dark frame through the UI (${(s.lit * 100).toFixed(1)}% lit)`);
+    note(stage, `header toggle → CPU: ${(s.lit * 100).toFixed(1)}% lit`);
+    await page.evaluate(() => localStorage.removeItem('filmbox.backend'));
+  } catch (err) {
+    fail(stage, `toggle: ${err}`);
+  }
+  await page.close();
+}
+
+/* ================================================================== *
+ * 13. Engine masters bypass, and advanced parameters are shown
+ * ================================================================== */
+
+{
+  const stage = 'masters';
+  const { page } = await openPage();
+  try {
+    await dropStill(page, BARS);
+    await settledStats(page);
+    const r = await page.evaluate(async () => {
+      const sleep = (ms) => new Promise((x) => setTimeout(x, ms));
+      const sect = (t) => [...document.querySelectorAll('.group')].find((x) => x.querySelector('.group-title')?.textContent === t);
+      const s = sect('Characteristic Curve');
+      if (s && !s.classList.contains('open')) s.querySelector('.group-toggle').click();
+      await sleep(300);
+      const advanced = [...document.querySelectorAll('.param-label')].some((l) => l.textContent === 'Layer crossover');
+      const tab = (name) => [...document.querySelectorAll('.tabs .tab')].find((t) => t.textContent.trim().startsWith(name));
+      const app = document.querySelector('.stage canvas');
+      const p = document.createElement('canvas');
+      p.width = 96;
+      p.height = 66;
+      const g = p.getContext('2d', { willReadFrequently: true });
+      const grab = () => {
+        g.drawImage(app, 0, 0, 96, 66);
+        return Array.from(g.getImageData(0, 0, 96, 66).data);
+      };
+      const settle = async () => {
+        let last = grab();
+        for (let k = 0; k < 30; k++) {
+          await sleep(200);
+          const now = grab();
+          let d = 0;
+          let mean = 0;
+          for (let i = 0; i < now.length; i += 4) {
+            d += Math.abs(now[i + 1] - last[i + 1]);
+            mean += now[i + 1];
+          }
+          if (d / (now.length / 4) < 6 && mean / (now.length / 4) > 10) return now;
+          last = now;
+        }
+        return last;
       };
       const diff = (a, b) => {
-        let s = 0;
-        for (let i = 0; i < a.length; i += 4) {
-          s += Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]);
-        }
-        return s / (a.length / 4);
+        let d = 0;
+        for (let i = 0; i < a.length; i += 4) d += Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]);
+        return d / (a.length / 4) / 3;
       };
-
-      const sect = (t) =>
-        [...document.querySelectorAll('.group')].find((x) => x.querySelector('.group-title')?.textContent === t);
-      const enable = (t, v) => {
-        const cb = sect(t)?.querySelector(".group-actions input[type='checkbox']");
-        if (cb && cb.checked !== v) cb.click();
-      };
-      const open = (t) => {
-        const x = sect(t);
-        if (x && !x.classList.contains('open')) x.querySelector('.group-toggle').click();
-      };
-      const tab = (name) =>
-        [...document.querySelectorAll('.tabs button')].find((b) => b.textContent.trim() === name)?.click();
-      const setP = (l, v) => {
-        const row = [...document.querySelectorAll('.param')].find(
-          (r) => r.querySelector('.param-label')?.textContent === l,
-        );
-        const sl = row?.querySelector("input[type='range']");
-        if (sl) setInput(sl, v);
-      };
-      const setSel = (l, v) => {
-        const row = [...document.querySelectorAll('.param')].find(
-          (r) => r.querySelector('.param-label')?.textContent === l,
-        );
-        const se = row?.querySelector('select');
-        if (!se) throw new Error(`no control for ${l}`);
-        se.value = v;
-        se.dispatchEvent(new Event('change', { bubbles: true }));
-      };
-
-      // Silence the tube so what is measured is the tape engine alone.
-      tab('Tube');
-      await sleep(300);
-      for (const t of [
-        'Signal & Reception', 'Sync & Timebase', 'Faults & Wear', 'Phosphor & Mask',
-        'Halation & Bloom', 'Convergence & Focus', 'Beam & Scanlines', 'Tube Geometry',
-      ]) {
-        enable(t, false);
-      }
-      await sleep(500);
-
-      tab('Tape');
-      await sleep(350);
-      open('Composite Signal');
-      open('Signal Noise');
-      open('VHS Tape');
-      await sleep(350);
-      for (const l of ['Composite noise', 'Luma noise', 'Chroma noise', 'Chroma phase noise']) setP(l, 0);
-      await sleep(600);
-
-      const res = {};
-      setSel('Chroma demodulation', 'box');
-      await sleep(800);
-      res.rainbowBox = stripeSat();
-      const boxFrame = grab();
-      setSel('Chroma demodulation', 'twoline');
-      await sleep(800);
-      res.rainbowComb = stripeSat();
-      res.combVsBox = diff(boxFrame, grab());
-
-      const crop = document.createElement('canvas');
-      crop.width = 200;
-      crop.height = 60;
-      const cg = crop.getContext('2d', { willReadFrequently: true });
-      const grabCrop = () => {
-        cg.drawImage(app, Math.floor(app.width * 0.3), Math.floor(app.height * 0.25), 200, 60, 0, 0, 200, 60);
-        return cg.getImageData(0, 0, 200, 60).data;
-      };
-      setSel('Chroma demodulation', 'box');
-      setSel('Scanline phase shift', '180');
-      await sleep(900);
-      const f1 = grabCrop();
-      await sleep(300);
-      const f2 = grabCrop();
-      await sleep(300);
-      const f3 = grabCrop();
-      res.crawlMoves = Math.max(diff(f1, f2), diff(f2, f3), diff(f1, f3));
-
-      setSel('Scanline phase shift', '0');
-      await sleep(900);
-      const s1 = grabCrop();
-      await sleep(300);
-      const s2 = grabCrop();
-      await sleep(300);
-      const s3 = grabCrop();
-      res.staticPhase = Math.max(diff(s1, s2), diff(s2, s3), diff(s1, s3));
-
-      setSel('Tape speed', 'sp');
-      await sleep(800);
-      const sp = grab();
-      setSel('Tape speed', 'ep');
-      await sleep(800);
-      res.spVsEp = diff(sp, grab());
-
-      return { ...res, tabs };
-    });
-    Object.assign(out, r);
-  } catch (err) {
-    out.error = String(err);
-  }
-  await p.close();
-  return out;
-})();
-
-if (tapeEngine.error) {
-  failures.push(`tape: ${tapeEngine.error}`);
-} else {
-  const want = ['Tape', 'Tube', 'Sound', 'A/V Link'];
-  if (tapeEngine.tabs.join(',') !== want.join(',')) {
-    failures.push(`tape: tabs are ${tapeEngine.tabs.join(', ')}, expected ${want.join(', ')}`);
-  }
-  if (tapeEngine.rainbowBox < 0.12) {
-    failures.push(
-      `tape: greyscale stripes came back only ${tapeEngine.rainbowBox.toFixed(3)} saturated — cross-colour is not emerging from the encode/decode`,
-    );
-  }
-  if (tapeEngine.rainbowBox < tapeEngine.rainbowComb * 1.5) {
-    failures.push(
-      `tape: box demodulation (${tapeEngine.rainbowBox.toFixed(3)}) should leave far more cross-colour than a 2-line comb (${tapeEngine.rainbowComb.toFixed(3)})`,
-    );
-  }
-  if (tapeEngine.combVsBox < 10) {
-    failures.push(`tape: the demodulation filter barely changed the picture (${tapeEngine.combVsBox.toFixed(1)}/px)`);
-  }
-  if (tapeEngine.crawlMoves < tapeEngine.staticPhase * 2.5) {
-    failures.push(
-      `tape: dot crawl is not crawling — ${tapeEngine.crawlMoves.toFixed(1)} of frame-to-frame change at 180° vs ${tapeEngine.staticPhase.toFixed(1)} at 0°`,
-    );
-  }
-  if (tapeEngine.spVsEp < 1.5) {
-    failures.push(`tape: SP and EP render almost identically (${tapeEngine.spVsEp.toFixed(1)}/px)`);
-  }
-}
-
-/* -------- 12. the CPU backend -------- */
-
-/*
- * A second renderer that needs no GPU. The assertion that matters is not that
- * it draws something, but that it draws the *same* picture: a backend that
- * quietly diverges is worse than one that fails, because the fallback would
- * silently change people's work.
- *
- * Compared with the time-varying sections switched off, since snow, glitching
- * and sync faults are reseeded per page load and would swamp the comparison.
- * A per-pixel difference remains even so, because the composite subcarrier
- * pattern depends on the frame counter at the moment of capture and the two
- * backends are measured in separate page loads — so the mean is asserted
- * tightly and the per-pixel figure loosely.
- */
-
-const cpuBackend = await (async () => {
-  const out = { gpuMean: 0, cpuMean: 0, gpuLit: 0, cpuLit: 0, perPixel: 0, selected: '', toggle: [], error: null };
-
-  const grab = async (backend) => {
-    const p = await browser.newPage({ viewport: { width: 1100, height: 820 } });
-    const errs = [];
-    p.on('pageerror', (e) => errs.push(e.message));
-    await p.addInitScript((b) => {
-      try {
-        localStorage.setItem('crtbox.backend', b);
-        localStorage.setItem('crtbox.guide.hideOnStart', '1');
-      } catch {
-        /* private window */
-      }
-    }, backend);
-    await p.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'load' });
-    await p.waitForTimeout(1600);
-    const r = await p.evaluate(async () => {
-      const sleep = (ms) => new Promise((x) => setTimeout(x, ms));
-      const c = document.createElement('canvas');
-      c.width = 320;
-      c.height = 240;
-      const g = c.getContext('2d');
-      ['#c0c0c0', '#c0c000', '#00c0c0', '#00c000', '#c000c0', '#c00000', '#0000c0'].forEach((col, i) => {
-        g.fillStyle = col;
-        g.fillRect((i * 320) / 7, 0, 320 / 7 + 1, 150);
-      });
-      g.fillStyle = '#fff';
-      for (let x = 0; x < 320; x += 3) g.fillRect(x, 160, 1, 80);
-      const blob = await new Promise((x) => c.toBlob(x, 'image/png'));
-      const dt = new DataTransfer();
-      dt.items.add(new File([blob], 't.png', { type: 'image/png' }));
-      window.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true }));
-      await sleep(700);
-
-      const sect = (t) =>
-        [...document.querySelectorAll('.group')].find((x) => x.querySelector('.group-title')?.textContent === t);
-      const enable = (t, v) => {
-        const cb = sect(t)?.querySelector(".group-actions input[type='checkbox']");
-        if (cb && cb.checked !== v) cb.click();
-      };
-      const tab = (n) =>
-        [...document.querySelectorAll('.tabs button')].find((b) => b.textContent.trim() === n)?.click();
-
-      tab('Tape');
-      await sleep(250);
-      enable('Signal Noise', false);
-      enable('Head Switching & Tracking', false);
-      tab('Tube');
-      await sleep(250);
-      enable('Sync & Timebase', false);
-      enable('Faults & Wear', false);
-      enable('Glitching', false);
-      await sleep(400);
-      const row = (l) =>
-        [...document.querySelectorAll('.param')].find((r) => r.querySelector('.param-label')?.textContent === l);
-      const setI = (el, v) => {
-        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, String(v));
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-      };
-      for (const [l, v] of [['Snow', 0], ['Dither', 0], ['Flicker', 0], ['Hum bar', 0]]) {
-        const rw = row(l);
-        if (rw) setI(rw.querySelector("input[type='range']"), v);
-      }
-      await sleep(2000);
-
-      const app = document.querySelector('.stage canvas');
-      const probe = document.createElement('canvas');
-      probe.width = 180;
-      probe.height = 135;
-      const pg = probe.getContext('2d', { willReadFrequently: true });
-      pg.drawImage(app, 0, 0, probe.width, probe.height);
-      const d = pg.getImageData(0, 0, probe.width, probe.height).data;
-      let sum = 0;
-      let lit = 0;
-      for (let i = 0; i < d.length; i += 4) {
-        const m = (d[i] + d[i + 1] + d[i + 2]) / 3;
-        sum += m;
-        if (m > 24) lit++;
-      }
-      return {
-        px: Array.from(d),
-        mean: sum / (d.length / 4),
-        lit: lit / (probe.width * probe.height),
-        selected:
-          document.querySelector('.backend-toggle button.active')?.dataset.backend ?? '',
-        resolved:
-          document.querySelector('.backend-toggle button.resolved')?.dataset.backend ?? '',
-      };
-    });
-    await p.close();
-    return { ...r, errs };
-  };
-
-  try {
-    const g = await grab('gpu');
-    const c = await grab('cpu');
-    out.toggle = await (async () => {
-      // Start on Auto and click through the segments, checking each takes.
-      const p = await browser.newPage({ viewport: { width: 1100, height: 820 } });
-      await p.addInitScript(() => {
-        try {
-          localStorage.removeItem('crtbox.backend');
-          localStorage.setItem('crtbox.guide.hideOnStart', '1');
-        } catch {
-          /* private window */
-        }
-      });
-      await p.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'load' });
-      await p.waitForTimeout(1500);
-      const seen = await p.evaluate(async () => {
-        const sleep = (ms) => new Promise((x) => setTimeout(x, ms));
-        const seg = (b) => document.querySelector(`.backend-toggle button[data-backend="${b}"]`);
-        const active = () => document.querySelector('.backend-toggle button.active')?.dataset.backend;
-        const order = [];
-        order.push(`start:${active()}`);
-        for (const b of ['cpu', 'gpu', 'auto']) {
-          seg(b)?.click();
-          await sleep(900);
-          order.push(`${b}:${active()}`);
-        }
-        // Auto must still mark which backend actually won.
-        order.push(`resolved:${document.querySelector('.backend-toggle button.resolved')?.dataset.backend}`);
-        return order;
-      });
-      await p.close();
-      return seen;
-    })();
-    if (c.errs.length) throw new Error(`CPU backend threw: ${c.errs[0]}`);
-    out.gpuMean = g.mean;
-    out.cpuMean = c.mean;
-    out.gpuLit = g.lit;
-    out.cpuLit = c.lit;
-    out.selected = c.selected;
-    let diff = 0;
-    let n = 0;
-    for (let i = 0; i < g.px.length; i += 4) {
-      diff += Math.abs(g.px[i] - c.px[i]) + Math.abs(g.px[i + 1] - c.px[i + 1]) + Math.abs(g.px[i + 2] - c.px[i + 2]);
-      n++;
-    }
-    out.perPixel = diff / n;
-  } catch (err) {
-    out.error = String(err);
-  }
-  return out;
-})();
-
-if (cpuBackend.error) {
-  failures.push(`cpu backend: ${cpuBackend.error}`);
-} else {
-  if (cpuBackend.selected !== 'cpu') {
-    failures.push(`cpu backend: the toggle reads "${cpuBackend.selected}", so the choice did not take`);
-  }
-  const want = ['start:auto', 'cpu:cpu', 'gpu:gpu', 'auto:auto'];
-  const got = cpuBackend.toggle.slice(0, 4).join(' ');
-  if (got !== want.join(' ')) {
-    failures.push(`backend toggle: clicking through gave "${got}", expected "${want.join(' ')}"`);
-  }
-  if (!/^resolved:(gpu|cpu)$/.test(cpuBackend.toggle[4] ?? '')) {
-    failures.push(
-      `backend toggle: on Auto, neither segment is marked as the one actually in use (${cpuBackend.toggle[4]})`,
-    );
-  }
-  if (cpuBackend.cpuLit < 0.3) {
-    failures.push(`cpu backend: only ${(cpuBackend.cpuLit * 100).toFixed(1)}% of the frame is lit — it is not rendering`);
-  }
-  const meanDelta = Math.abs(cpuBackend.cpuMean - cpuBackend.gpuMean);
-  if (meanDelta > 6) {
-    failures.push(
-      `cpu backend: mean brightness ${cpuBackend.cpuMean.toFixed(1)} against the GPU's ${cpuBackend.gpuMean.toFixed(1)} — the two backends have diverged`,
-    );
-  }
-  if (cpuBackend.perPixel > 30) {
-    failures.push(
-      `cpu backend: ${cpuBackend.perPixel.toFixed(1)} per-pixel difference from the GPU, which is more than subcarrier phase can explain`,
-    );
-  }
-}
-
-/* -------- 13. engine masters, and advanced parameters -------- */
-
-/*
- * Two assertions that are easy to break and silent when broken:
- *
- *   - Each engine has a master bypass on its tab, and it genuinely bypasses
- *     rather than only greying out the label. Checked by rendering the same
- *     source in all four combinations and requiring them to differ.
- *   - Advanced parameters are shown by default. They used to be hidden, which
- *     made two thirds of the application invisible until you found a tickbox,
- *     so a regression to that is worth catching.
- */
-
-const masters = await (async () => {
-  const out = { advancedShown: false, states: {}, tapeStruck: false, error: null };
-  const p = await browser.newPage({ viewport: { width: 1300, height: 900 } });
-  try {
-    await p.addInitScript(() => {
-      try {
-        localStorage.clear();
-        localStorage.setItem('crtbox.guide.hideOnStart', '1');
-      } catch {
-        /* private window */
-      }
-    });
-    await p.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'load' });
-    await p.waitForTimeout(1600);
-    Object.assign(
-      out,
-      await p.evaluate(async () => {
-        const sleep = (ms) => new Promise((x) => setTimeout(x, ms));
-        const res = {};
-
-        // 'Dropout length' is flagged advanced; with nothing configured it
-        // must be on screen once its section is open.
-        const sect = (t) =>
-          [...document.querySelectorAll('.group')].find(
-            (x) => x.querySelector('.group-title')?.textContent === t,
-          );
-        const open = (t) => {
-          const x = sect(t);
-          if (x && !x.classList.contains('open')) x.querySelector('.group-toggle').click();
-        };
-        open('VHS Tape');
-        await sleep(500);
-        res.advancedShown = [...document.querySelectorAll('.param-label')].some(
-          (l) => l.textContent === 'Edge wave detail',
-        );
-
-        const c = document.createElement('canvas');
-        c.width = 320;
-        c.height = 240;
-        const g = c.getContext('2d');
-        ['#c0c0c0', '#c0c000', '#00c0c0', '#00c000', '#c000c0', '#c00000', '#0000c0'].forEach((col, i) => {
-          g.fillStyle = col;
-          g.fillRect((i * 320) / 7, 0, 320 / 7 + 1, 160);
-        });
-        g.fillStyle = '#fff';
-        for (let x = 0; x < 320; x += 3) g.fillRect(x, 170, 1, 70);
-        const blob = await new Promise((x) => c.toBlob(x, 'image/png'));
-        const dt = new DataTransfer();
-        dt.items.add(new File([blob], 't.png', { type: 'image/png' }));
-        window.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true }));
-        await sleep(1800);
-
-        const app = document.querySelector('.stage canvas');
-        const probe = document.createElement('canvas');
-        probe.width = 180;
-        probe.height = 135;
-        const pg = probe.getContext('2d', { willReadFrequently: true });
-        const stats = () => {
-          pg.drawImage(app, 0, 0, probe.width, probe.height);
-          const d = pg.getImageData(0, 0, probe.width, probe.height).data;
-          let sum = 0;
-          let struct = 0;
-          for (let i = 0; i < d.length; i += 4) sum += (d[i] + d[i + 1] + d[i + 2]) / 3;
-          for (let y = 1; y < probe.height; y++) {
-            for (let x = 0; x < probe.width; x += 4) {
-              struct += Math.abs(d[(y * probe.width + x) * 4] - d[((y - 1) * probe.width + x) * 4]);
-            }
-          }
-          return { mean: sum / (d.length / 4), struct: struct / ((probe.height * probe.width) / 4) };
-        };
-        // Wait for the picture to settle rather than sleeping a fixed time.
-        // Under load a fixed wait samples a frame that has not been drawn yet,
-        // which reads as "perfectly flat" and fails the comparison below for
-        // reasons that have nothing to do with the engines.
-        const settle = async (minMean = 20) => {
-          let last = stats();
-          for (let i = 0; i < 40; i++) {
-            await sleep(250);
-            const now = stats();
-            const moved = Math.abs(now.mean - last.mean) + Math.abs(now.struct - last.struct);
-            if (now.mean >= minMean && moved < 0.05) return now;
-            last = now;
-          }
-          return last;
-        };
-
-        const tabSwitch = (name) =>
-          [...document.querySelectorAll('.tabs .tab')]
-            .find((t) => t.textContent.trim().startsWith(name))
-            ?.querySelector('input');
-        const tabEl = (name) =>
-          [...document.querySelectorAll('.tabs .tab')].find((t) => t.textContent.trim().startsWith(name));
-
-        res.states = {};
-        res.states.both = await settle();
-        tabSwitch('Tape').click();
-        res.states.tubeOnly = await settle();
-        res.tapeStruck = !!tabEl('Tape')?.classList.contains('bypassed');
-        tabSwitch('Tape').click();
+      const all = await settle();
+      const out = { advanced, struck: false, d: {} };
+      for (const name of ['Stock', 'Lens', 'Gate']) {
+        tab(name).querySelector('input').click();
+        const off = await settle();
+        if (name === 'Stock') out.struck = tab('Stock').classList.contains('bypassed');
+        out.d[name] = diff(all, off);
+        tab(name).querySelector('input').click();
         await settle();
-        tabSwitch('Tube').click();
-        res.states.tapeOnly = await settle();
-        tabSwitch('Tape').click();
-        res.states.neither = await settle();
-        return res;
-      }),
-    );
+      }
+      return out;
+    });
+    if (!r.advanced) fail(stage, 'fine-detail parameters are hidden on a fresh profile — they should be shown by default');
+    if (!r.struck) fail(stage, 'a bypassed engine is not marked as such on its tab');
+    // The lens on bars is mostly softness and vignetting, so its bypass is the
+    // smallest change of the three; the bars are a poor lens test and a fine
+    // stock or gate test. A paused still is deterministic — the same film frame
+    // every time — so even a small difference here is real, not noise.
+    const floor = { Stock: 4, Lens: 1, Gate: 4 };
+    for (const [name, d] of Object.entries(r.d)) {
+      if (d < floor[name]) fail(stage, `switching the ${name} engine off barely changed the picture (${d.toFixed(1)}/px)`);
+    }
+    note(stage, `bypassing changes the picture by ${Object.entries(r.d).map(([k, v]) => `${k} ${v.toFixed(1)}`).join(' · ')} /px · advanced shown`);
   } catch (err) {
-    out.error = String(err);
+    fail(stage, String(err));
   }
-  await p.close();
-  return out;
-})();
-
-if (masters.error) {
-  failures.push(`engine masters: ${masters.error}`);
-} else {
-  if (!masters.advancedShown) {
-    failures.push('advanced: fine-detail parameters are hidden on a fresh profile — they should be shown by default');
-  }
-  if (!masters.tapeStruck) {
-    failures.push('engine masters: a bypassed engine is not marked as such on its tab');
-  }
-  const st = masters.states;
-  const d = (a, b) => Math.abs(a.mean - b.mean) + Math.abs(a.struct - b.struct);
-  if (d(st.both, st.tubeOnly) < 1.5) {
-    failures.push(`engine masters: switching the tape engine off barely changed the picture (${d(st.both, st.tubeOnly).toFixed(2)})`);
-  }
-  if (d(st.both, st.tapeOnly) < 1.5) {
-    failures.push(`engine masters: switching the tube engine off barely changed the picture (${d(st.both, st.tapeOnly).toFixed(2)})`);
-  }
-  // Both off is the flattest thing the app can produce: no scanlines, no tape.
-  if (!(st.neither.struct < st.both.struct && st.neither.struct < st.tapeOnly.struct)) {
-    failures.push(
-      `engine masters: with both engines off the picture is not the flattest (${st.neither.struct.toFixed(2)} against ${st.both.struct.toFixed(2)} and ${st.tapeOnly.struct.toFixed(2)})`,
-    );
-  }
+  await page.close();
 }
+
+for (const n of main.noise) fail('main page', n);
 
 await browser.close();
 server.close();
@@ -1657,46 +1492,10 @@ server.close();
 if (failures.length) {
   console.error('SMOKE TEST FAILED');
   for (const f of failures) console.error('  •', f);
+  console.error('\nwhat did pass:');
+  for (const r of report) console.error(r);
   process.exit(1);
 }
 
 console.log('smoke test passed');
-console.log(`  gl        ${gl.version}`);
-console.log(
-  `  picture   ${(picture.lit * 100).toFixed(1)}% lit · contrast ${picture.contrast.toFixed(2)} · line structure ${picture.lineStructure.toFixed(3)}`,
-);
-console.log(
-  `  video     element ${videoResult.presented.toFixed(0)} · tube ${(videoResult.lit * 100).toFixed(1)}% lit`,
-);
-console.log(
-  `  audio     transport rms ${audio.transportRms.toFixed(4)} · noise rms ${audio.noiseRms.toFixed(4)}`,
-);
-console.log(
-  `  keyframes ${keys.diamonds} markers · saturation ${keys.sat.map((v) => v.toFixed(2)).join(' → ')}`,
-);
-console.log(
-  `  framing   4:3 ${framing.ratios['4:3']?.toFixed(3)} · 16:9 ${framing.ratios['16:9']?.toFixed(3)}`,
-);
-console.log(
-  `  packaged  file:// mounted ${packaged.mounted} chars · ${(packaged.lit * 100).toFixed(1)}% lit`,
-);
-console.log(
-  `  trails    lit ${trails.bright.toFixed(1)} → ${trails.afterDark.toFixed(1)} just after black → ${trails.settled.toFixed(1)} settled`,
-);
-console.log(
-  `  colour    saturation ${sections.satFull.toFixed(2)} → ${sections.satZero.toFixed(2)} at zero · temperature B−R ${sections.warmRB.toFixed(0)} → ${sections.coldRB.toFixed(0)}`,
-);
-console.log(`  glitch    ${sections.glitchOnVsOff.toFixed(1)} per-pixel change when switched on`);
-console.log(
-  `  guide     shown on start, closes, reopens, ${guide.tubes} tubes · ⓘ reveals ${guide.paramInfo.length} chars (param) / ${guide.sectionInfo.length} (section)`,
-);
-console.log(
-  `  cpu       mean ${cpuBackend.cpuMean.toFixed(1)} vs GPU ${cpuBackend.gpuMean.toFixed(1)} · ${cpuBackend.perPixel.toFixed(1)}/px apart · ${(cpuBackend.cpuLit * 100).toFixed(1)}% lit`,
-);
-console.log(`  toggle    ${cpuBackend.toggle.join('  ')}`);
-console.log(
-  `  masters   both ${masters.states.both.struct.toFixed(1)} · tube-only ${masters.states.tubeOnly.struct.toFixed(1)} · tape-only ${masters.states.tapeOnly.struct.toFixed(1)} · neither ${masters.states.neither.struct.toFixed(1)} (vertical structure) · advanced shown`,
-);
-console.log(
-  `  tape      cross-colour ${tapeEngine.rainbowBox.toFixed(3)} box vs ${tapeEngine.rainbowComb.toFixed(3)} comb · dot crawl ${tapeEngine.crawlMoves.toFixed(1)} moving vs ${tapeEngine.staticPhase.toFixed(1)} static · SP→EP ${tapeEngine.spVsEp.toFixed(1)}/px`,
-);
+for (const r of report) console.log(r);

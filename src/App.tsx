@@ -7,7 +7,7 @@ import {
   sanitize,
   applyEngineMasters,
 } from './core/params';
-import { PRESETS, parsePreset, serializePreset } from './core/presets';
+import { PRESETS, PRESET_BY_ID, parsePreset, serializePreset } from './core/presets';
 import {
   EMPTY_TIMELINE,
   Timeline as TimelineData,
@@ -59,7 +59,9 @@ interface ExportResult {
 }
 
 export default function App() {
-  const [settings, setSettings] = useState<Settings>({ ...DEFAULTS });
+  // The app opens on the flagship — a Super 8 cartridge — rather than on the
+  // inert defaults, because the first thing anyone loads should look like film.
+  const [settings, setSettings] = useState<Settings>(() => ({ ...(PRESET_BY_ID['super8-1974']?.settings ?? DEFAULTS) }));
   const [tab, setTab] = useState<Tab>('stock');
   // Advanced parameters are shown by default. Hiding two thirds of a control
   // panel behind a tickbox makes the application look smaller than it is, and
@@ -428,7 +430,36 @@ export default function App() {
         time = stillTimeRef.current;
       }
 
-      renderOnce(time, frameRef.current++, dt);
+      // A paused film is a still picture: every effect is a function of the
+      // frame number, so if nothing that feeds the render has changed, the
+      // last frame drawn is already correct. Skipping it keeps a paused
+      // window from burning a core.
+      const canvas = canvasRef.current;
+      const changed =
+        time !== lastDrawn.current.time ||
+        settingsRef.current !== lastDrawn.current.settings ||
+        timelineRef.current !== lastDrawn.current.timeline ||
+        splitRef.current !== lastDrawn.current.split ||
+        seedRef.current !== lastDrawn.current.seed ||
+        rendererRef.current !== lastDrawn.current.renderer ||
+        (canvas?.width ?? 0) !== lastDrawn.current.w ||
+        (canvas?.height ?? 0) !== lastDrawn.current.h ||
+        frameRef.current - lastDrawn.current.frame > 30;
+      if (changed) {
+        lastDrawn.current = {
+          time,
+          settings: settingsRef.current,
+          timeline: timelineRef.current,
+          split: splitRef.current,
+          seed: seedRef.current,
+          renderer: rendererRef.current,
+          w: canvas?.width ?? 0,
+          h: canvas?.height ?? 0,
+          frame: frameRef.current,
+        };
+        renderOnce(time, frameRef.current, dt);
+      }
+      frameRef.current++;
 
       const engine = engineRef.current;
       if (engine.ready) {
@@ -452,6 +483,18 @@ export default function App() {
   }, [media, renderOnce]);
 
   const currentTimeRef = useRef(0);
+  /** What the last drawn frame was drawn from, so an unchanged one is not redrawn. */
+  const lastDrawn = useRef<{
+    time: number;
+    settings: Settings | null;
+    timeline: TimelineData | null;
+    split: number;
+    seed: number;
+    renderer: Renderer | null;
+    w: number;
+    h: number;
+    frame: number;
+  }>({ time: -1, settings: null, timeline: null, split: -1, seed: -1, renderer: null, w: 0, h: 0, frame: 0 });
 
   /* ---------------- media loading ---------------- */
 
@@ -1460,8 +1503,9 @@ export default function App() {
                   setExportSettings((prev) => ({ ...prev, end: prev.end || v.duration || 0 }));
                 }}
                 onLoadedData={(e) => {
+                  lastDrawn.current.time = -1;
                   // A video that has loaded but never played may not have
-                  // *presented* a frame, so the tube would sit black until the
+                  // *presented* a frame, so the film would sit black until the
                   // user pressed play. A nudge off zero forces one out.
                   const v = e.currentTarget;
                   if (v.paused && v.currentTime === 0) {
@@ -1470,16 +1514,17 @@ export default function App() {
                 }}
                 onPlay={() => setPlaying(true)}
                 onPause={() => setPlaying(false)}
-                onSeeking={() => {
-                  // Scrubbing jumps to an unrelated part of the clip, so the
-                  // phosphor has to be cleared or the old scene bleeds in. An
-                  // export is the opposite case: it advances one frame at a time
-                  // by seeking, which is continuous playback as far as the tube
-                  // is concerned. Resetting there wiped the persistence buffer
-                  // before every single frame, so trails — and burn-in — never
-                  // appeared in a rendered video at all.
+                onSeeked={() => {
+                  // The film frame shown is held until the next one comes
+                  // round, so after a scrub the frame held must be thrown
+                  // away — it is from the old position — and taken again now
+                  // that the decoder has the new one. An export steps by
+                  // seeking and uploads every frame itself, so it is left
+                  // alone: dropping its frames between upload and render
+                  // would show the wrong one.
                   if (exportingRef.current) return;
                   rendererRef.current?.resetHistory();
+                  lastDrawn.current.time = -1;
                 }}
               />
             )}
@@ -1490,6 +1535,7 @@ export default function App() {
                 src={media.url}
                 alt=""
                 onLoad={(e) => {
+                  lastDrawn.current.time = -1;
                   setSrcDims({
                     width: e.currentTarget.naturalWidth,
                     height: e.currentTarget.naturalHeight,
@@ -1633,7 +1679,7 @@ export default function App() {
               value={pasteText}
               onChange={(e) => setPasteText(e.target.value)}
               spellCheck={false}
-              placeholder='{"tube.humBar": 0.4, "noise.flybackLevel": -38}'
+              placeholder='{"format.stock": "ektachrome160", "fade.years": 40}'
             />
             <div className="row">
               <button className="primary" onClick={() => applyPasted(pasteText)}>

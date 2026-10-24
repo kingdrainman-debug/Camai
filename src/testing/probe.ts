@@ -12,7 +12,8 @@
  * loads over file://, and it costs nothing until it is called.
  */
 
-import { DEFAULTS, ParamValue, applyEngineMasters, sanitize } from '../core/params';
+import { DEFAULTS, ParamValue, Settings, applyEngineMasters, sanitize } from '../core/params';
+import { PRESETS } from '../core/presets';
 import { frameState, rates } from '../film/clock';
 import { BackendChoice, createRenderer } from '../video/backend';
 
@@ -21,7 +22,8 @@ export type ProbeSource =
   | { kind: 'ramp'; stops: number }
   | { kind: 'texture'; panPxPerSec: number; cell: number }
   | { kind: 'counter' }
-  | { kind: 'bars' };
+  | { kind: 'bars' }
+  | { kind: 'scene' };
 
 export interface ProbeRequest {
   backend: BackendChoice;
@@ -108,6 +110,10 @@ function drawSource(ctx: CanvasRenderingContext2D, w: number, h: number, src: Pr
     ctx.fillRect(0, 0, w, h);
     return;
   }
+  if (src.kind === 'scene') {
+    drawScene(ctx, w, h, t);
+    return;
+  }
   const bars = ['#c0c0c0', '#c0c000', '#00c0c0', '#00c000', '#c000c0', '#c00000', '#0000c0'];
   bars.forEach((c, i) => {
     ctx.fillStyle = c;
@@ -117,6 +123,66 @@ function drawSource(ctx: CanvasRenderingContext2D, w: number, h: number, src: Pr
   ctx.fillRect(0, h * 0.75, w, h * 0.25);
   ctx.fillStyle = '#fff';
   ctx.fillRect(w * 0.06, h * 0.8, w * 0.25, h * 0.15);
+}
+
+/**
+ * A small outdoor scene with the things film treats most characteristically:
+ * a sky running to a hot sun, skin, foliage, a saturated red, a white shirt in
+ * sun and a figure in deep shade. Drawn, not photographed, so it ships with
+ * the code and every render of it is reproducible.
+ */
+function drawScene(g: CanvasRenderingContext2D, w: number, h: number, t: number): void {
+  const sky = g.createLinearGradient(0, 0, 0, h * 0.62);
+  sky.addColorStop(0, '#3f78c4');
+  sky.addColorStop(1, '#bcd6ee');
+  g.fillStyle = sky;
+  g.fillRect(0, 0, w, h * 0.62);
+  // The sun, clipped hard to white in the source as a video camera would.
+  const sx = w * (0.78 + 0.02 * Math.sin(t * 0.7));
+  const sun = g.createRadialGradient(sx, h * 0.18, 0, sx, h * 0.18, h * 0.2);
+  sun.addColorStop(0, '#ffffff');
+  sun.addColorStop(0.18, '#ffffff');
+  sun.addColorStop(0.35, '#fff6d8');
+  sun.addColorStop(1, 'rgba(255,240,200,0)');
+  g.fillStyle = sun;
+  g.fillRect(0, 0, w, h * 0.62);
+  // Hills and a hedge.
+  g.fillStyle = '#4d6b33';
+  g.beginPath();
+  g.moveTo(0, h * 0.62);
+  for (let x = 0; x <= w; x += w / 16) g.lineTo(x, h * (0.55 + 0.04 * Math.sin(x / w * 7)));
+  g.lineTo(w, h);
+  g.lineTo(0, h);
+  g.fill();
+  g.fillStyle = '#2b3d1c';
+  g.fillRect(0, h * 0.62, w, h * 0.12);
+  g.fillStyle = '#6f8f3e';
+  g.fillRect(0, h * 0.74, w, h * 0.26);
+  // A figure in sun: skin, a white shirt, a red jumper over the shoulders.
+  const fx = w * (0.32 + 0.03 * Math.sin(t * 1.3));
+  g.fillStyle = '#f2efe8';
+  g.fillRect(fx - w * 0.06, h * 0.48, w * 0.12, h * 0.3);
+  g.fillStyle = '#c4231c';
+  g.fillRect(fx - w * 0.065, h * 0.48, w * 0.13, h * 0.06);
+  g.fillStyle = '#d9a384';
+  g.beginPath();
+  g.ellipse(fx, h * 0.4, w * 0.035, h * 0.065, 0, 0, Math.PI * 2);
+  g.fill();
+  g.fillStyle = '#3b2a1e';
+  g.beginPath();
+  g.ellipse(fx, h * 0.36, w * 0.037, h * 0.035, 0, Math.PI, Math.PI * 2);
+  g.fill();
+  // A second figure in deep shade under a tree.
+  g.fillStyle = '#1d2614';
+  g.beginPath();
+  g.ellipse(w * 0.66, h * 0.38, w * 0.16, h * 0.2, 0, 0, Math.PI * 2);
+  g.fill();
+  g.fillStyle = '#1a1a1c';
+  g.fillRect(w * 0.6, h * 0.5, w * 0.06, h * 0.26);
+  g.fillStyle = '#5a4034';
+  g.beginPath();
+  g.ellipse(w * 0.63, h * 0.47, w * 0.022, h * 0.04, 0, 0, Math.PI * 2);
+  g.fill();
 }
 
 export async function renderProbe(req: ProbeRequest): Promise<ProbeResult> {
@@ -184,10 +250,14 @@ export async function renderProbe(req: ProbeRequest): Promise<ProbeResult> {
 
 declare global {
   interface Window {
-    __filmbox?: { renderProbe: typeof renderProbe; defaults: typeof DEFAULTS };
+    __filmbox?: { renderProbe: typeof renderProbe; defaults: Settings; presets: Record<string, Settings> };
   }
 }
 
 export function installProbe(): void {
-  window.__filmbox = { renderProbe, defaults: DEFAULTS };
+  window.__filmbox = {
+    renderProbe,
+    defaults: DEFAULTS,
+    presets: Object.fromEntries(PRESETS.map((p) => [p.id, p.settings])),
+  };
 }

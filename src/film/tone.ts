@@ -148,6 +148,9 @@ export interface Tone {
   layers: number[];
   /** Layer order of the original from the surface down. Camera films put blue on top. */
   originalLayers: number[];
+  /** The original, and the final positive, are single-layer silver: a scratch clears all channels at once. */
+  originalMono: boolean;
+  finalMono: boolean;
 
   // Telecine.
   tkGamma: number;
@@ -459,7 +462,9 @@ function computeTone(s: Settings): Tone {
   const tkGamma = Math.log10(tkWhite / tkGrey) / Math.max(aim - dminMean, 0.05);
   const unexposedMean = (unexposed[0] + unexposed[1] + unexposed[2]) / 3;
   const rawNeg = mode === ToneMode.Negative && process === Process.Raw;
-  const tkFloor = rawNeg || mode === ToneMode.Linear ? 0 : Math.min(0.5, tkGrey * Math.pow(10, tkGamma * (aim - unexposedMean)));
+  // Only a telecine sets a black point; with it off, video log-light is an
+  // exact straight line in density, which is what lets the curve be measured.
+  const tkFloor = !tkOn || rawNeg || mode === ToneMode.Linear ? 0 : Math.min(0.5, tkGrey * Math.pow(10, tkGamma * (aim - unexposedMean)));
 
   return {
     mode,
@@ -511,6 +516,8 @@ function computeTone(s: Settings): Tone {
     unexposed,
     layers,
     originalLayers: [2, 1, 0],
+    originalMono: st.mono,
+    finalMono: st.mono || (mode === ToneMode.Negative && process === Process.Print && ps.mono),
     tkGamma,
     tkGrey,
     tkFloor,

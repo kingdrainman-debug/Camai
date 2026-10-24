@@ -318,7 +318,10 @@ function fieldState(
     leak = num(s, 'leak.amount') * (flare * flare * 0.7 + burst * burst * 0.8);
     leakAngle = num(s, 'leak.position') * Math.PI * 2 + snoise(t * speed * 0.3, seed, CH.leak + 2) * 0.5;
     const d = rollEnd(n, g.rollFrames);
-    rollFog = num(s, 'leak.rollFog') * Math.exp(-d / (r.camera * 1.4)) * (0.8 + 0.2 * bhash(n, seed, CH.leak + 3));
+    // The head and tail of a load are burned through, then clear within a
+    // second or so: the fogged length is the few turns exposed while loading.
+    const sec = d / r.camera;
+    rollFog = num(s, 'leak.rollFog') * Math.exp(-(sec * sec) / (2 * 0.55 * 0.55)) * (0.8 + 0.2 * bhash(n, seed, CH.leak + 3));
   }
 
   // ---- cue marks ----
@@ -470,7 +473,9 @@ export function frameState(input: ClockInput): FrameState {
       // Anchored on one edge of the aperture, reaching inward and curling.
       const edge = Math.floor(ihash(k, seg, seed + CH.hair + 3) * 4);
       const along = 0.12 + 0.76 * ihash(k, seg, seed + CH.hair + 4);
-      const length = (0.08 + 0.18 * ihash(k, seg, seed + CH.hair + 5)) * size;
+      // Length as a share of the window: a hair caught in the gate is a few
+      // millimetres whatever the gauge, but it is drawn from the window edge.
+      const length = (0.08 + 0.18 * ihash(k, seg, seed + CH.hair + 5)) * Math.sqrt(size);
       const curl = bhash(k, seg, seed + CH.hair + 6) * 2.4;
       const lean = bhash(k, seg, seed + CH.hair + 7) * 0.7;
       let ax = 0;
@@ -495,7 +500,9 @@ export function frameState(input: ClockInput): FrameState {
         x += (Math.cos(a) * step) / aspect;
         y += Math.sin(a) * step;
       }
-      hairWidth[k] = (0.0016 + 0.0016 * ihash(k, seg, seed + CH.hair + 10)) * size;
+      // A human hair is 50–100 µm: physical, so it is several times thicker
+      // across a Super 8 gate than a 35 mm one.
+      hairWidth[k] = (((50 + 50 * ihash(k, seg, seed + CH.hair + 10)) / 1000) * size) / geo.visH;
     }
     for (let k = 0; k < MAX_SPECKS; k++) {
       const len = life * (0.5 + ihash(k, seed, CH.speck));
@@ -507,7 +514,7 @@ export function frameState(input: ClockInput): FrameState {
       const edgeU = u < 0.5 ? Math.pow(u * 2, 2) * 0.5 : 1 - Math.pow((1 - u) * 2, 2) * 0.5;
       specks[k * 4] = ihash(k, seg, seed + CH.speck + 5) < 0.5 ? edgeU : u;
       specks[k * 4 + 1] = v;
-      specks[k * 4 + 2] = (0.002 + 0.006 * Math.pow(ihash(k, seg, seed + CH.speck + 6), 2)) * size;
+      specks[k * 4 + 2] = (((40 + 160 * Math.pow(ihash(k, seg, seed + CH.speck + 6), 2)) / 1000) * size) / geo.visH;
       specks[k * 4 + 3] = 0.6 + 0.4 * ihash(k, seg, seed + CH.speck + 7);
     }
   }

@@ -210,13 +210,15 @@ export class FilmRenderer {
   }
 
   /**
-   * Forget cached film frames. Nothing in the film chain accumulates from one
-   * frame to the next — every effect is a function of the frame number — so
-   * seeking needs no history wiped, and an export that steps by seeking gets
-   * exactly what playback would have shown.
+   * Forget held source frames and cached film frames, after a scrub. Nothing
+   * in the film chain accumulates from one frame to the next — every effect
+   * is a function of the frame number — so this is only ever about which
+   * picture is held, never about trails or feedback, and an export that
+   * steps by seeking gets exactly what playback would have shown.
    */
   resetHistory(): void {
     for (const f of this.film) f.key = '';
+    this.slots.clear();
   }
 
   private draw(program: WebGLProgram, target: Target | null): void {
@@ -370,6 +372,7 @@ export class FilmRenderer {
     u.f('u_fadeNeg', tone.fadeNegative ? 1 : 0);
     u.v3('u_layers', tone.layers[0], tone.layers[1], tone.layers[2]);
     u.v3('u_origLayers', tone.originalLayers[0], tone.originalLayers[1], tone.originalLayers[2]);
+    u.v2('u_layersMono', tone.originalMono ? 1 : 0, tone.finalMono ? 1 : 0);
 
     u.f('u_dust', fs.dust);
     u.f('u_fibres', fs.fibres);

@@ -140,7 +140,7 @@ export const SECTION_HELP: Record<string, SectionHelp> = {
   },
   projnoise: {
     what: 'The projector itself, in the room: the claw striking the film once a frame, a second rattle from a worn mechanism, air from the shutter and lamp fan chopped at the blade rate, and the motor. It is not part of the soundtrack, so it is added after the speaker, the way CRTBOX added its flyback whine — because it is a machine beside you, not a sound coming out of one.',
-    how: 'This is the direct analogue of CRTBOX’s flyback whine, and the single most evocative sound here. It is locked to the frame rate because it is the frame rate. Raise wear for an old machine; lower the mechanism tone for a big one. With the A/V Link, a frame that jumps in the gate is a frame that clacks louder.',
+    how: 'Probably the single most evocative sound in the application, and worth having on for anything meant to feel watched in a room. It is locked to the frame rate because it is the frame rate. Raise wear for an old machine; lower the mechanism tone for a big one. With the A/V Link, a frame that jumps in the gate is a frame that clacks louder.',
   },
   link: {
     what: 'The picture and the sound go through the same machine. A frame the claw struck badly both weaves and clatters; a splice through the gate is a splice past the sound head; the dirt on the picture is dirt on the track; the lamp and the exciter share a supply. This section makes those couplings explicit — it is what makes the application one object rather than two effects.',
@@ -268,7 +268,7 @@ export const PARAM_HELP: Record<string, string> = {
   'gatedirt.specks': 'How much grit is lodged in the gate. It stays still on screen for seconds while the picture moves beneath it, and gathers towards the edges, where the film drags.',
   'gatedirt.life': 'How long a hair or a speck stays before it is dislodged, in seconds. Real gate dirt can last a whole shot.',
   'gatedirt.wiggle': 'How much a hair flutters as each frame is pulled past it. Hairs at the edge of the gate are disturbed once a frame by the film moving, and sway in the air from the shutter.',
-  'gatedirt.size': 'Scales hairs and specks together. Gate grit is a fixed size in the gate, so unlike film dirt it does not grow with a smaller format — this is purely how big the debris in this particular gate is.',
+  'gatedirt.size': 'Scales hairs and specks together. They are sized physically — a hair is 50–100 µm — so a hair caught in a Super 8 gate is a thick dark line across a tenth of the picture, and the same hair in a 35 mm gate a fine one.',
 
   /* ---------------- film dirt ---------------- */
   'filmdirt.enabled': 'Switches film dirt off: no dust, no lint, on either the negative or the positive.',

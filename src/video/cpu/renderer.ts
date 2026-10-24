@@ -66,8 +66,10 @@ export class CpuRenderer {
     return this.slots.has(filmFrame);
   }
 
+  /** Forget held source frames and cached film frames, after a scrub. */
   resetHistory(): void {
     this.filmKeys = ['', ''];
+    this.slots.clear();
   }
 
   dispose(): void {

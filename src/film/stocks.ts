@@ -399,8 +399,8 @@ export const PRINT_STOCKS: PrintStock[] = [
     grainSize: 5,
     // The notorious one. Cyan goes first, yellow next, magenta hardly at all,
     // so a print left at room temperature for a few decades turns pink.
-    fade: g3(0.02, 0.0026, 0.011),
-    stain: 0.003,
+    fade: g3(0.02, 0.0026, 0.014),
+    stain: 0.001,
     saturation: 1.05,
     impurity: 1.1,
     layers: ['m', 'c', 'y'],

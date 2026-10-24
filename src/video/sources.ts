@@ -34,10 +34,16 @@ export class SourceSlots<H> {
   /** Choose the slot a new upload for `tag` goes into. */
   claim(tag: number, width: number, height: number): SourceSlot<H> {
     let i = this.tags.indexOf(tag);
+    if (i < 0) i = this.tags.findIndex((t) => Number.isNaN(t));
     if (i < 0) {
-      // Least recently used — the frame that has already scrolled past.
+      // Evict the frame furthest from the new one. Not the least recently
+      // used: a pulldown frame looks its first field's frame up last, which
+      // would make the frame still needed by the next field look the oldest —
+      // and evicting it showed the frame before it in its place.
       i = 0;
-      for (let k = 1; k < this.used.length; k++) if (this.used[k] < this.used[i]) i = k;
+      for (let k = 1; k < this.tags.length; k++) {
+        if (Math.abs(this.tags[k] - tag) > Math.abs(this.tags[i] - tag)) i = k;
+      }
     }
     this.tags[i] = tag;
     this.versions[i] = ++this.counter;

@@ -330,13 +330,18 @@ function fibre(mx: number, my: number, fs: FrameState, frameSeed: number, out: F
   const curl = (hash12(kx + 3.3, ky + 3.3) - 0.5) * 0.6;
   const off = (dx * -diry + dy * dirx) - curl * len * Math.sin(PI * s) - curl * len * 0.4 * Math.sin(TAU * s);
   const along = Math.abs(along0) < len * 0.5 ? 1 : 0;
-  const w = fs.dirtSizeMm * 0.09;
+  const w = fs.dirtSizeMm * 0.45;
   const a = (1 - smoothstep(w * 0.5, w, Math.abs(off))) * along;
   if (hash12(kx + 9.9, ky + 9.9) < fs.dirtNegative) out[0] = a * 2;
   else out[1] = a * 2;
 }
 
-function removeLayers(D: Float64Array, base: number[], order: number[], amount: number, depth: number): void {
+function removeLayers(D: Float64Array, base: number[], order: number[], amount: number, depth: number, mono: boolean): void {
+  if (mono) {
+    const k = 1 - amount * Math.min(1, depth * 1.5 + 0.3);
+    for (let c = 0; c < 3; c++) D[c] = base[c] + (D[c] - base[c]) * k;
+    return;
+  }
   const gone = depth * 3 + 0.2;
   for (let i = 0; i < 3; i++) {
     const rem = clamp(gone - i, 0, 1) * amount;
@@ -345,7 +350,7 @@ function removeLayers(D: Float64Array, base: number[], order: number[], amount: 
   }
 }
 
-function scratches(D: Float64Array, base: number[], order: number[], x: number, onOriginal: number, sc: Float32Array): void {
+function scratches(D: Float64Array, base: number[], order: number[], x: number, onOriginal: number, sc: Float32Array, mono: boolean): void {
   for (let i = 0; i < MAX_SCRATCHES; i++) {
     const sx = sc[i * 4];
     const sw = sc[i * 4 + 1];
@@ -366,7 +371,7 @@ function scratches(D: Float64Array, base: number[], order: number[], x: number, 
       D[2] += add;
     } else {
       const core = 1 - smoothstep(sw * 0.45, sw, d);
-      removeLayers(D, base, order, core * sz, depth);
+      removeLayers(D, base, order, core * sz, depth, mono);
       const q = (d - sw) / (sw * 0.35 + 1e-5);
       const rim = 0.18 * Math.exp(-q * q) * sz;
       D[0] += rim;
@@ -551,6 +556,8 @@ export function filmPass(
         D[2] += sigB * Math.pow(Math.max(D[2] - base[2], 0.03), tone.grainExp) * gn[2];
       }
 
+      if (negativePath && tone.fadeNegative) applyDye(D, base);
+
       dust(mx, my, fs, fseed, dirtOut);
       let dirtNeg = dirtOut[0];
       let dirtPos = dirtOut[1];
@@ -560,12 +567,11 @@ export function filmPass(
       D[0] += dirtNeg;
       D[1] += dirtNeg;
       D[2] += dirtNeg;
-      scratches(D, base, tone.originalLayers, mx, 1, field.scratches);
+      scratches(D, base, tone.originalLayers, mx, 1, field.scratches, tone.originalMono);
 
       /* ---- to a positive ---- */
       let pBase = tone.finalDmin;
       if (negativePath) {
-        if (tone.fadeNegative) applyDye(D, base);
         for (let gi = 0; gi < 4; gi++) {
           if (gi >= tone.generations) break;
           grainNoise(umx, umy, dupeCell, dupeCell, dupeCell, offX + gi * 71.3 + 500, offY + gi * 13.9 + 500, tone.grainRough, mono, tone.grainIndep, gn);
@@ -619,10 +625,12 @@ export function filmPass(
         }
       }
 
+      if (!tone.fadeNegative) applyDye(P, pBase);
+
       P[0] += dirtPos;
       P[1] += dirtPos;
       P[2] += dirtPos;
-      scratches(P, pBase, tone.layers, mx, 0, field.scratches);
+      scratches(P, pBase, tone.layers, mx, 0, field.scratches, tone.finalMono);
 
       if (tone.bleach > 0) {
         const net = (Math.max(P[0] - pBase[0], 0) + Math.max(P[1] - pBase[1], 0) + Math.max(P[2] - pBase[2], 0)) / 3;
@@ -664,8 +672,6 @@ export function filmPass(
         const rim = Math.exp(-q * q);
         for (let c = 0; c < 3; c++) P[c] = mix(P[c], pBase[c], disc) + 1.2 * rim;
       }
-
-      if (!tone.fadeNegative) applyDye(P, pBase);
 
       if (fs.mould > 0) {
         const qx = mx / (H * 0.2) + statX + 13.1;
@@ -885,7 +891,8 @@ export function presentPass(
         const dx = wx - fs.specks[k * 4] * aspect;
         const dy = wy - fs.specks[k * 4 + 1];
         const dd = Math.sqrt(dx * dx + dy * dy);
-        block = Math.max(block, fs.specks[k * 4 + 3] * (1 - smoothstep(sz * 0.55, sz, dd)));
+        const edge = sz * (0.65 + 0.7 * vnoise((dx / sz) * 1.6 + k * 17, (dy / sz) * 1.6 + k * 17));
+        block = Math.max(block, fs.specks[k * 4 + 3] * (1 - smoothstep(edge * 0.7, edge, dd)));
       }
       const pass = 1 - 0.94 * block;
 

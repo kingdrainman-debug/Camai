@@ -91,6 +91,7 @@ uniform vec3 u_stain;
 uniform float u_fadeNeg;
 uniform vec3 u_layers;
 uniform vec3 u_origLayers;
+uniform vec2 u_layersMono;   // original, final positive: single silver layer
 
 // Dirt and decay.
 uniform float u_dust;
@@ -190,7 +191,7 @@ vec2 fibre(vec2 mm) {
   float curl = (hash12(key + 3.3) - 0.5) * 0.6;
   float off = dot(d, nrm) - curl * len * sin(PI * s) - curl * len * 0.4 * sin(TAU * s);
   float along = abs(dot(d, dir)) < len * 0.5 ? 1.0 : 0.0;
-  float w = u_dirtSize * 0.09;
+  float w = u_dirtSize * 0.45;
   float a = (1.0 - smoothstep(w * 0.5, w, abs(off))) * along;
   return hash12(key + 9.9) < u_dirtNeg ? vec2(a * 2.0, 0.0) : vec2(0.0, a * 2.0);
 }
@@ -199,7 +200,9 @@ vec2 fibre(vec2 mm) {
 
 // Removes dye layers from the emulsion surface down. A shallow scratch takes
 // only the top layer and is coloured; a deep one takes all three and is clear.
-vec3 removeLayers(vec3 D, vec3 base, vec3 order, float amount, float depth) {
+vec3 removeLayers(vec3 D, vec3 base, vec3 order, float amount, float depth, float mono) {
+  // Silver is one layer: a scratch takes it evenly, and is never coloured.
+  if (mono > 0.5) return base + (D - base) * (1.0 - amount * min(1.0, depth * 1.5 + 0.3));
   float layersGone = depth * 3.0 + 0.2;
   for (int i = 0; i < 3; i++) {
     float rem = clamp(layersGone - float(i), 0.0, 1.0) * amount;
@@ -212,7 +215,7 @@ vec3 removeLayers(vec3 D, vec3 base, vec3 order, float amount, float depth) {
 // Applies every running scratch that is on the given film (0 positive, 1
 // negative/original). Emulsion scratches take dye away; base scratches scatter
 // the light that crosses them and so read as added density.
-vec3 scratches(vec3 D, vec3 base, vec3 order, float x, float onOriginal) {
+vec3 scratches(vec3 D, vec3 base, vec3 order, float x, float onOriginal, float mono) {
   for (int i = 0; i < 6; i++) {
     vec4 sc = u_scratch[i];
     if (sc.z <= 0.0) continue;
@@ -228,7 +231,7 @@ vec3 scratches(vec3 D, vec3 base, vec3 order, float x, float onOriginal) {
       D += vec3(0.45 * sc.z * exp(-(d * d) / (2.0 * hw * hw)));
     } else {
       float core = 1.0 - smoothstep(sc.y * 0.45, sc.y, d);
-      D = removeLayers(D, base, order, core * sc.z, depth);
+      D = removeLayers(D, base, order, core * sc.z, depth, mono);
       // Displaced gelatin at the edges of the cut catches the light.
       float rim = exp(-pow((d - sc.y) / (sc.y * 0.35 + 1e-5), 2.0));
       D += vec3(0.18 * rim * sc.z);
@@ -331,18 +334,21 @@ void main() {
     D += sig * pow(dn, vec3(u_grainExp)) * grainNoise(um, cell, off);
   }
 
+  // A negative that is the final film (scanned, or on a light box) fades
+  // as itself. Its dyes fade; the dirt on it, added next, does not.
+  bool negativePath = u_mode == 0;
+  if (negativePath && u_fadeNeg > 0.5) D = base + u_dye * (D - base) + u_stain;
+
   // Dirt and scratches on the original. On a negative that is printed,
   // anything opaque holds back the printer light — so it prints white.
   vec2 dirt = dust(mm) + fibre(mm);
-  bool negativePath = u_mode == 0;
   D += vec3(dirt.x);
-  D = scratches(D, base, u_origLayers, mm.x, 1.0);
+  D = scratches(D, base, u_origLayers, mm.x, 1.0, u_layersMono.x);
 
   /* ---- to a positive ---- */
   vec3 P;
   vec3 pBase = u_finalDmin;
   if (negativePath) {
-    if (u_fadeNeg > 0.5) D = base + u_dye * (D - base) + u_stain;
     // Duplicate generations: interpositive and internegative, each a near
     // unity-contrast copy with grain of its own.
     for (int g = 0; g < 4; g++) {
@@ -374,9 +380,13 @@ void main() {
     }
   }
 
+  // The positive's dyes have aged. Everything after this — dirt, scratches,
+  // splices, silver — is not dye, and does not fade with it.
+  if (u_fadeNeg < 0.5) P = pBase + u_dye * (P - pBase) + u_stain;
+
   // Dirt and scratches on the positive: opaque, so dark.
   P += vec3(dirt.y);
-  P = scratches(P, pBase, u_layers, mm.x, 0.0);
+  P = scratches(P, pBase, u_layers, mm.x, 0.0, u_layersMono.y);
 
   // Bleach bypass leaves the silver in alongside the dye: neutral density in
   // proportion to how much developed.
@@ -410,9 +420,7 @@ void main() {
     P += vec3(1.2 * rim);
   }
 
-  /* ---- the positive's age ---- */
-  if (u_fadeNeg < 0.5) P = pBase + u_dye * (P - pBase) + u_stain;
-
+  /* ---- the film's physical decay ---- */
   if (u_mould > 0.0) {
     vec2 q = mm / (H * 0.2) + stat + vec2(13.1, 7.3) + drift / (H * 0.2);
     float m = fbm(q) + 0.18 * (vnoise(mm / (H * 0.008)) - 0.5);
