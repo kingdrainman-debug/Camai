@@ -970,10 +970,17 @@ export default function App() {
       }
 
       if (exportSettings.format === 'wav') {
-        if (!wav) throw new Error('no decodable audio track in the source');
-        const saved = await saveBlob(wav, `${baseName(media?.name)}-film.wav`, [
-          { name: 'WAV audio', extensions: ['wav'] },
-        ]);
+        if (!wav) throw new Error('the soundtrack could not be rendered');
+        const batchTarget = batchOutputRef.current;
+        let saved: string | null;
+        if (batchTarget && desktop) {
+          await desktop.writeFile(batchTarget, await wav.arrayBuffer());
+          saved = batchTarget;
+        } else {
+          saved = await saveBlob(wav, `${baseName(media?.name)}-film.wav`, [
+            { name: 'WAV audio', extensions: ['wav'] },
+          ]);
+        }
         setStatus(saved ? `Saved to ${saved}` : 'Cancelled.');
         return (outcome = saved ? { ok: true, outputPath: saved } : { ok: false, error: 'cancelled' });
       }
@@ -1099,9 +1106,18 @@ export default function App() {
       ];
       if (wav) extra.push({ name: 'audio.wav', data: new Uint8Array(await wav.arrayBuffer()) });
       const zipBlob = await zipFrames(files, extra);
-      const saved = await saveBlob(zipBlob, `${baseName(media?.name)}-film-frames.zip`, [
-        { name: 'Zip archive', extensions: ['zip'] },
-      ]);
+      // A batch render already knows where it is going; there is nobody to
+      // answer a save dialog.
+      const batchTarget = batchOutputRef.current;
+      let saved: string | null;
+      if (batchTarget && desktop) {
+        await desktop.writeFile(batchTarget, await zipBlob.arrayBuffer());
+        saved = batchTarget;
+      } else {
+        saved = await saveBlob(zipBlob, `${baseName(media?.name)}-film-frames.zip`, [
+          { name: 'Zip archive', extensions: ['zip'] },
+        ]);
+      }
       setStatus(saved ? `Saved to ${saved}` : 'Cancelled.');
       outcome = saved ? { ok: true, outputPath: saved } : { ok: false, error: 'cancelled' };
     } catch (err) {

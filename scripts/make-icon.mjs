@@ -40,23 +40,13 @@ function roundedRect(x, y, halfW, halfH, r) {
 }
 
 /**
- * A CRT seen head on: dark bezel, curved screen, colour bars behind the
- * scanline structure, and the phosphor glow leaking past the glass edge.
+ * A strip of film seen on a light box: a dark rounded tile, a strip of warm
+ * base running down it with perforations either side, and one frame lit —
+ * a Kodachrome sky with a low sun, its highlight ringed red by halation.
  */
 function drawIcon(size) {
   const px = new Uint8Array(size * size * 4);
-  // Supersample; at 16px the scanlines otherwise alias into a grey smear.
   const ss = size <= 64 ? 4 : 2;
-
-  const bars = [
-    [0.72, 0.72, 0.72],
-    [0.75, 0.72, 0.15],
-    [0.15, 0.68, 0.72],
-    [0.16, 0.66, 0.24],
-    [0.68, 0.18, 0.66],
-    [0.72, 0.18, 0.18],
-    [0.16, 0.22, 0.70],
-  ];
 
   for (let iy = 0; iy < size; iy++) {
     for (let ix = 0; ix < size; ix++) {
@@ -67,58 +57,73 @@ function drawIcon(size) {
 
       for (let sy = 0; sy < ss; sy++) {
         for (let sx = 0; sx < ss; sx++) {
-          // Normalised coordinates in [-1, 1].
           const u = ((ix + (sx + 0.5) / ss) / size) * 2 - 1;
           const v = ((iy + (sy + 0.5) / ss) / size) * 2 - 1;
 
-          // --- body ---
+          // --- tile ---
           const bodyD = roundedRect(u, v, 0.94, 0.94, 0.30);
           const bodyA = 1 - smoothstep(-0.012, 0.012, bodyD);
-          let cr = 0.075;
-          let cg = 0.080;
-          let cb = 0.085;
+          let cr = 0.07;
+          let cg = 0.065;
+          let cb = 0.06;
 
-          // Faceplate curvature: sample the picture through a barrel warp so
-          // the bars bow the way they do on real glass.
-          const wu = u * (1 + 0.13 * v * v);
-          const wv = v * (1 + 0.17 * u * u);
-          const screenD = roundedRect(wu, wv, 0.70, 0.60, 0.20);
-          const screenA = 1 - smoothstep(-0.010, 0.010, screenD);
+          // --- the strip: amber base, running the full height ---
+          const stripD = Math.abs(u) - 0.66;
+          const stripA = 1 - smoothstep(-0.01, 0.01, stripD);
+          if (stripA > 0) {
+            const br = 0.23;
+            const bg = 0.13;
+            const bb = 0.05;
+            cr = cr * (1 - stripA) + br * stripA;
+            cg = cg * (1 - stripA) + bg * stripA;
+            cb = cb * (1 - stripA) + bb * stripA;
 
-          if (screenA > 0) {
-            const bx = clamp01((wu / 0.70) * 0.5 + 0.5);
-            const [pr, pg, pb] = bars[Math.min(bars.length - 1, Math.floor(bx * bars.length))];
+            // Perforations: light through clear base, both edges.
+            const pitch = 0.36;
+            const py = ((v + 1.2) % pitch) - pitch / 2;
+            const holeD = Math.min(
+              roundedRect(u + 0.53, py, 0.065, 0.085, 0.03),
+              roundedRect(u - 0.53, py, 0.065, 0.085, 0.03),
+            );
+            const holeA = 1 - smoothstep(-0.01, 0.01, holeD);
+            cr = cr * (1 - holeA) + 0.96 * holeA;
+            cg = cg * (1 - holeA) + 0.92 * holeA;
+            cb = cb * (1 - holeA) + 0.84 * holeA;
 
-            // Scanlines, tied to the icon's own pixel grid so they stay crisp.
-            const lines = Math.max(6, Math.round(size / 7));
-            const phase = ((wv / 0.60) * 0.5 + 0.5) * lines;
-            const d = Math.abs(phase - Math.floor(phase) - 0.5) / 0.30;
-            const beam = Math.exp(-d * d);
-            const lit = 0.34 + 0.66 * beam;
+            // The frame: a sky running to a low sun over dark ground.
+            const frameD = roundedRect(u, v, 0.4, 0.31, 0.05);
+            const frameA = 1 - smoothstep(-0.01, 0.01, frameD);
+            if (frameA > 0) {
+              const t = clamp01((v + 0.31) / 0.62);
+              let fr = 0.2 + 0.55 * t;
+              let fg = 0.36 + 0.4 * t;
+              let fb = 0.66 + 0.18 * t;
+              // Ground.
+              const ground = smoothstep(0.1, 0.13, v + 0.04 * Math.sin(u * 7));
+              fr = fr * (1 - ground) + 0.16 * ground;
+              fg = fg * (1 - ground) + 0.22 * ground;
+              fb = fb * (1 - ground) + 0.08 * ground;
+              // Sun, and its red halo.
+              const sd = Math.hypot(u - 0.17, v + 0.05);
+              const sun = 1 - smoothstep(0.07, 0.09, sd);
+              const halo = Math.exp(-Math.pow((sd - 0.09) / 0.07, 2)) * (1 - sun);
+              fr = fr * (1 - sun) + 1.0 * sun + halo * 0.55;
+              fg = fg * (1 - sun) + 0.97 * sun + halo * 0.18;
+              fb = fb * (1 - sun) + 0.86 * sun + halo * 0.02;
+              cr = cr * (1 - frameA) + fr * frameA;
+              cg = cg * (1 - frameA) + fg * frameA;
+              cb = cb * (1 - frameA) + fb * frameA;
+            }
 
-            // Vignette, and the beam blooming towards the middle.
-            const vig = 1 - 0.42 * (wu * wu + wv * wv);
-
-            const sr = pr * lit * vig;
-            const sg = pg * lit * vig;
-            const sb = pb * lit * vig;
-
-            cr = cr * (1 - screenA) + sr * screenA;
-            cg = cg * (1 - screenA) + sg * screenA;
-            cb = cb * (1 - screenA) + sb * screenA;
+            // The neighbouring frames, dimmer, above and below the frame line.
+            for (const off of [-0.7, 0.7]) {
+              const nD = roundedRect(u, v - off, 0.4, 0.31, 0.05);
+              const nA = (1 - smoothstep(-0.01, 0.01, nD)) * 0.55;
+              cr = cr * (1 - nA) + 0.45 * nA;
+              cg = cg * (1 - nA) + 0.42 * nA;
+              cb = cb * (1 - nA) + 0.45 * nA;
+            }
           }
-
-          // Phosphor glow spilling past the glass onto the bezel.
-          const glow = Math.exp(-Math.max(screenD, 0) * 11) * 0.30;
-          cr += glow * 0.55;
-          cg += glow * 0.60;
-          cb += glow * 0.42;
-
-          // A highlight along the top edge of the moulding.
-          const sheen = Math.exp(-Math.pow((v + 0.80) * 7, 2)) * (1 - screenA) * 0.10;
-          cr += sheen;
-          cg += sheen;
-          cb += sheen;
 
           r += cr * bodyA;
           g += cg * bodyA;

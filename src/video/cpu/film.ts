@@ -49,14 +49,35 @@ function response(x: number, g: number, xt: number, xs: number, t: number, s: nu
   return g * (t * sp((x - xt) / t) - s * sp((x - xs) / s));
 }
 
+/*
+ * The sRGB transfer, both ways, by table. The camera pass decodes every one
+ * of up to 36 taps per pixel and the present pass encodes every pixel, and a
+ * Math.pow apiece was most of the CPU backend's time. 4,096 entries with
+ * linear interpolation stay within a few thousandths of a code value of the
+ * exact curve, well inside what the GPU's own half floats round to.
+ */
+const LUT_N = 4096;
+const DECODE = new Float64Array(LUT_N + 2);
+const ENCODE = new Float64Array(LUT_N + 2);
+for (let i = 0; i <= LUT_N + 1; i++) {
+  const v = Math.min(i / LUT_N, 1);
+  DECODE[i] = v < 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+  ENCODE[i] = v < 0.0031308 ? v * 12.92 : 1.055 * Math.pow(v, 1 / 2.4) - 0.055;
+}
+
+function lut(table: Float64Array, c: number): number {
+  const x = (c < 0 ? 0 : c > 1 ? 1 : c) * LUT_N;
+  const i = x | 0;
+  const f = x - i;
+  return table[i] + (table[i + 1] - table[i]) * f;
+}
+
 function srgbToLinear(c: number): number {
-  const v = clamp(c, 0, 1);
-  return v < 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+  return lut(DECODE, c);
 }
 
 function linearToSrgb(c: number): number {
-  const v = clamp(c, 0, 1);
-  return v < 0.0031308 ? v * 12.92 : 1.055 * Math.pow(v, 1 / 2.4) - 0.055;
+  return lut(ENCODE, c);
 }
 
 function sdRoundRect(px: number, py: number, hx: number, hy: number, r: number): number {

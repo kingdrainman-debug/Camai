@@ -2,9 +2,9 @@ name: Windows build
 
 # Produces the two things a Windows user can double-click:
 #
-#   CRTBOX-<version>-Setup.exe      one-click installer, no wizard, makes a
+#   FILMBOX-<version>-Setup.exe      one-click installer, no wizard, makes a
 #                                   desktop and Start Menu shortcut, then runs
-#   CRTBOX-<version>-Portable.exe   a single file that just opens
+#   FILMBOX-<version>-Portable.exe   a single file that just opens
 #
 # This has to run on a Windows runner. Two reasons: editing the exe's icon and
 # version resources needs native tooling (or wine), and `ffmpeg-static` installs
@@ -68,7 +68,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: crtbox-windows
+          name: filmbox-windows
           path: |
             release/*.exe
             release/*.blockmap
@@ -95,7 +95,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.name }}
-          name: CRTBOX ${{ steps.tag.outputs.name }}
+          name: FILMBOX ${{ steps.tag.outputs.name }}
           files: |
             release/*.exe
           draft: false
@@ -103,9 +103,9 @@ jobs:
           body: |
             ## Download
 
-            - **[CRTBOX Setup](../../releases/latest)** — double-click, it installs
+            - **[FILMBOX Setup](../../releases/latest)** — double-click, it installs
               itself and opens. A desktop shortcut is created.
-            - **CRTBOX Portable** — a single file, nothing is installed. Double-click
+            - **FILMBOX Portable** — a single file, nothing is installed. Double-click
               and it runs.
 
             The build is not code-signed, so Windows SmartScreen shows

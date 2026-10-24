@@ -1,24 +1,23 @@
 {
-  "name": "crtbox",
-  "productName": "CRTBOX",
-  "version": "2.2.0",
-  "description": "Analogue Horror Box — a composite/VHS signal emulator and a CRT television emulator in one application, for picture and sound.",
+  "name": "filmbox",
+  "productName": "FILMBOX",
+  "version": "1.0.0",
+  "description": "Film stock and format emulation for picture and sound: Super 8 to 65 mm, characteristic curves, grain fixed to the film, halation, printing, dye fading, gate weave, dirt, splices, pulldown, magnetic and optical soundtracks and the projector in the room.",
   "license": "MIT",
   "private": true,
   "type": "module",
   "main": "electron/main.cjs",
-  "homepage": "https://github.com/kingdrainman-debug/Analoguehorrorbox",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview",
-    "electron:dev": "CRTBOX_DEV_SERVER=http://localhost:5173 electron .",
+    "electron:dev": "FILMBOX_DEV_SERVER=http://localhost:5173 electron .",
     "electron:start": "npm run build && electron .",
     "dist": "npm run build && electron-builder",
     "dist:all": "npm run build && electron-builder -mwl",
     "smoke": "node scripts/smoke.mjs",
-    "shots": "node scripts/shots.mjs",
+    "shots": "npm run build && node scripts/shots.mjs",
     "test": "npm run typecheck && npm run build && npm run help:check && npm run smoke",
     "help:check": "node scripts/check-help.mjs",
     "bench": "npm run build && node scripts/bench.mjs",
@@ -48,9 +47,9 @@
     "ffmpeg-static": "^5.2.0"
   },
   "build": {
-    "appId": "rs.crtbox.app",
-    "productName": "CRTBOX",
-    "copyright": "Copyright © 2026 CRTBOX contributors",
+    "appId": "app.filmbox.desktop",
+    "productName": "FILMBOX",
+    "copyright": "Copyright © 2026 FILMBOX contributors",
     "directories": {
       "output": "release",
       "buildResources": "build"
@@ -91,8 +90,8 @@
       "createStartMenuShortcut": true,
       "runAfterFinish": true,
       "deleteAppDataOnUninstall": false,
-      "shortcutName": "CRTBOX",
-      "uninstallDisplayName": "CRTBOX"
+      "shortcutName": "FILMBOX",
+      "uninstallDisplayName": "FILMBOX"
     },
     "portable": {
       "artifactName": "${productName}-${version}-Portable.${ext}",
@@ -116,6 +115,6 @@
     }
   },
   "author": {
-    "name": "CRTBOX contributors"
+    "name": "FILMBOX contributors"
   }
 }

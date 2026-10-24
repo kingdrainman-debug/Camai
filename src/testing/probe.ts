@@ -38,6 +38,8 @@ export interface ProbeRequest {
   seed?: number;
   /** Return the pixels, or only a channel-mean summary. */
   pixels?: boolean;
+  /** Read frames back at all. Off for timing, where a readback would dominate. */
+  readback?: boolean;
 }
 
 export interface ProbeFrame {
@@ -218,6 +220,10 @@ export async function renderProbe(req: ProbeRequest): Promise<ProbeResult> {
         renderer.setSource(srcCanvas, srcW, srcH, field.n);
       }
       renderer.render({ settings, time, outFrame: k, frame: k, dt: 1 / r.output, audioLevel: 0, splitX: -1, seed });
+      if (req.readback === false) {
+        frames.push({ outFrame: k, filmFrames: [fs.fields[0].n, fs.fields[1].n], mean: [0, 0, 0] });
+        continue;
+      }
       rctx.drawImage(canvas, 0, 0);
       const data = rctx.getImageData(0, 0, req.width, req.height).data;
       let sr = 0;
@@ -241,6 +247,12 @@ export async function renderProbe(req: ProbeRequest): Promise<ProbeResult> {
         rgb,
         mean: [sr / n, sg / n, sb / n],
       });
+    }
+    // A WebGL draw is asynchronous; without a readback the clock would stop
+    // before the work did. One tiny read at the end flushes the queue.
+    if (req.readback === false) {
+      rctx.drawImage(canvas, 0, 0, 1, 1, 0, 0, 1, 1);
+      rctx.getImageData(0, 0, 1, 1);
     }
   } finally {
     renderer.dispose();

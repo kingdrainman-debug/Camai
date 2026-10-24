@@ -23,13 +23,19 @@ jobs:
       - name: Typecheck and build
         run: npm run build
 
+      # Every parameter and section must be documented, and every preset must
+      # name only parameters that exist. A data check, so it runs first.
+      - name: Help and presets
+        run: npm run help:check
+
       - name: Install Chromium for the smoke test
         run: npx --yes playwright@1.49.1 install --with-deps chromium
 
-      # tsc cannot catch a shader that fails to compile or a worklet that fails
-      # to register, which are the two ways this app actually breaks. The smoke
-      # test drives the built bundle in a real browser and asserts the picture
-      # comes out lit, with contrast, and with measurable scanline structure.
+      # tsc cannot catch a shader that fails to compile, a worklet that fails
+      # to register, or a parameter that never reaches the picture. The smoke
+      # test drives the built bundle in a real browser — through the interface,
+      # and through a probe that measures the film itself: the curve's toe and
+      # shoulder, grain fixed to the film, dirt persistence, fading, pulldown.
       - name: Smoke test
         run: npm run smoke
 
@@ -40,4 +46,4 @@ jobs:
         run: npx electron-builder --win dir --x64 -c.win.signAndEditExecutable=false
 
       - name: Confirm the exe was produced
-        run: test -f release/win-unpacked/CRTBOX.exe && echo "CRTBOX.exe packaged"
+        run: test -f release/win-unpacked/FILMBOX.exe && echo "FILMBOX.exe packaged"

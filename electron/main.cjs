@@ -1,13 +1,13 @@
 /*
- * CRTBOX desktop shell.
+ * FILMBOX desktop shell.
  *
  * The renderer is the same web app that runs at a URL; everything this process
  * adds is the stuff a browser tab is not allowed to do — real file dialogs,
  * writing to a path the user chose, and driving a bundled ffmpeg so exports can
  * be H.264/HEVC/ProRes with muxed audio instead of just WebM.
  *
- * It also implements the headless batch mode: `crtbox --input a.mp4 --output
- * b.mp4 --preset failing` renders without ever showing a window, which is what
+ * It also implements the headless batch mode: `filmbox --input a.mp4 --output
+ * b.mp4 --preset super8-1974` renders without ever showing a window, which is what
  * makes the app usable from a script.
  */
 
@@ -19,7 +19,7 @@ const { spawn } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const { pathToFileURL } = require('node:url');
 
-const DEV_SERVER = process.env.CRTBOX_DEV_SERVER || '';
+const DEV_SERVER = process.env.FILMBOX_DEV_SERVER || '';
 const INDEX_HTML = path.join(__dirname, '..', 'dist', 'index.html');
 
 /* ------------------------------------------------------------------ *
@@ -30,7 +30,7 @@ function ffmpegPath() {
   // Explicit override wins, then the bundled static build, then whatever is on
   // PATH. A missing ffmpeg is not fatal — it only removes the mp4/mov/gif
   // export targets, and WebM still works.
-  if (process.env.CRTBOX_FFMPEG) return process.env.CRTBOX_FFMPEG;
+  if (process.env.FILMBOX_FFMPEG) return process.env.FILMBOX_FFMPEG;
   try {
     let p = require('ffmpeg-static');
     if (typeof p === 'string' && p) {
@@ -102,7 +102,7 @@ async function encodeStart(_event, opts) {
   const id = randomUUID();
   let audioPath = null;
   if (opts.audio && opts.audio.byteLength) {
-    audioPath = path.join(os.tmpdir(), `crtbox-${id}.wav`);
+    audioPath = path.join(os.tmpdir(), `filmbox-${id}.wav`);
     fs.writeFileSync(audioPath, Buffer.from(opts.audio));
   }
   const args = buildArgs({ ...opts, audioPath });
@@ -202,7 +202,7 @@ function parseCli(argv) {
 }
 
 /**
- * A media path given as a bare argument, e.g. from "Open with CRTBOX" or from
+ * A media path given as a bare argument, e.g. from "Open with FILMBOX" or from
  * dropping a file onto the exe. Distinct from the render CLI, which needs both
  * --input and --output.
  */
@@ -229,32 +229,34 @@ function coerceCli(v) {
 }
 
 const HELP = `
-CRTBOX — CRT television emulation for video and audio
+FILMBOX — film stock and format emulation for video and audio
 
-  crtbox                                     open the application
-  crtbox --input IN --output OUT [options]    render without a window
+  filmbox                                     open the application
+  filmbox --input IN --output OUT [options]    render without a window
 
 Options
   --input PATH          source video or image
   --output PATH         destination file
   --preset NAME         built-in preset id (see docs/PRESETS.md)
   --settings PATH       preset JSON exported from the app
-  --format FMT          h264 | hevc | prores | gif | webm      (default h264)
-  --fps N               output frame rate                      (default: source)
-  --quality N           CRF for h264/hevc, profile for ProRes  (default 18)
-  --scale N             render scale, 0.25 .. 2.0              (default 1)
+  --format FMT          h264 | hevc | prores | gif | pngseq      (default h264)
+  --fps N               output frame rate: 23.976 | 24 | 25 | 29.97 | 30 | 50 | 59.94
+                        (default: the film's own rate)
+  --quality N           CRF for h264/hevc, profile for ProRes    (default 18)
+  --scale N             render scale, 0.25 .. 2.0                (default 1)
   --resolution R        output height: source | 480p | 576p | 720p | 1080p
-                        | 1440p | 2160p | custom               (default source)
+                        | 1440p | 2160p | custom                 (default source)
   --height N            output height, with --resolution custom
   --start S --end S     clip range in seconds
-  --seed N              randomiser / noise seed
-  --<group>.<param> V   override any effect parameter, e.g. --tube.humBar 0.4
+  --seed N              noise and event seed
+  --<group>.<param> V   override any parameter, e.g. --format.stock ektachrome160
 
 Parameter names are exactly the keys used in exported preset JSON.
 
-The rendered frame is always the shape of the tube, so --geometry.aspect
-decides the output aspect ratio and --resolution decides its size. There are
-never black bars baked into the file.
+The rendered frame is always the shape of the projected picture, so
+--framing.aspect decides the output aspect ratio and --resolution its size.
+There are never black bars baked into the file. The frame rate is a parameter
+too (--framing.fps), because it decides the cadence: --fps is a shorthand.
 `;
 
 /* ------------------------------------------------------------------ *
@@ -276,7 +278,7 @@ function createWindow(initialFile) {
     minWidth: 1020,
     minHeight: 660,
     backgroundColor: '#0a0b0c',
-    title: 'CRTBOX',
+    title: 'FILMBOX',
     icon: path.join(__dirname, '..', 'build', 'icon.png'),
     // Nothing is painted until the renderer has something to show, so the
     // window appears complete rather than as a white rectangle that then
@@ -320,7 +322,7 @@ function focusMainWindow() {
 }
 
 function log(message) {
-  process.stderr.write(`crtbox: ${message}\n`);
+  process.stderr.write(`filmbox: ${message}\n`);
 }
 
 async function runHeadless(job) {
@@ -342,7 +344,7 @@ async function runHeadless(job) {
       sandbox: false,
       offscreen: false,
       backgroundThrottling: false,
-      additionalArguments: ['--crtbox-batch'],
+      additionalArguments: ['--filmbox-batch'],
     },
   });
 
@@ -351,7 +353,7 @@ async function runHeadless(job) {
   // Every level, not just warnings: in a batch render the renderer's log is the
   // only visibility there is.
   win.webContents.on('console-message', (_e, _level, message) => {
-    process.stderr.write(`crtbox: ${message}\n`);
+    process.stderr.write(`filmbox: ${message}\n`);
   });
 
   const ready = new Promise((resolve) => ipcMain.once('job:ready', resolve));
@@ -504,11 +506,11 @@ if (cliJob && cliJob.help) {
           process.stdout.write(`${result.outputPath}\n`);
           app.exit(0);
         } else {
-          process.stderr.write(`crtbox: ${(result && result.error) || 'render failed'}\n`);
+          process.stderr.write(`filmbox: ${(result && result.error) || 'render failed'}\n`);
           app.exit(1);
         }
       } catch (err) {
-        process.stderr.write(`crtbox: ${err.message}\n`);
+        process.stderr.write(`filmbox: ${err.message}\n`);
         app.exit(1);
       }
       return;
