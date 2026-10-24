@@ -7,10 +7,9 @@ export type ExportFormat = 'h264' | 'hevc' | 'prores' | 'gif' | 'webm' | 'pngseq
 
 export interface ExportSettings {
   format: ExportFormat;
-  fps: number;
   quality: number;
   scale: number;
-  /** Output height target. The width follows from the tube's aspect ratio. */
+  /** Output height target. The width follows from the projection aspect. */
   resolution: ResolutionTarget;
   /** Used only when `resolution` is 'custom'. */
   customHeight: number;
@@ -23,7 +22,6 @@ export interface ExportSettings {
 
 export const DEFAULT_EXPORT: ExportSettings = {
   format: isDesktop ? 'h264' : 'webm',
-  fps: 30,
   quality: 18,
   scale: 1,
   resolution: 'source',
@@ -46,6 +44,10 @@ interface Props {
   outputSize: { width: number; height: number };
   /** Output height ÷ source height. Above 1 the render is an upscale. */
   upscale: number;
+  /** Frame rate of the output, from Framing & Output. */
+  fps: number;
+  /** Film frames per second shown, for the cadence note. */
+  filmFps: number;
   onChange(next: ExportSettings): void;
   onRenderDeterministic(): void;
   onRecordRealtime(): void;
@@ -115,6 +117,8 @@ export function ExportPanel({
   status,
   outputSize,
   upscale,
+  fps,
+  filmFps,
   onChange,
   onRenderDeterministic,
   onRecordRealtime,
@@ -128,7 +132,7 @@ export function ExportPanel({
       setFfmpeg(false);
       return;
     }
-    window.crtbox?.ffmpegAvailable().then(setFfmpeg).catch(() => setFfmpeg(false));
+    window.filmbox?.ffmpegAvailable().then(setFfmpeg).catch(() => setFfmpeg(false));
   }, []);
 
   const set = <K extends keyof ExportSettings>(key: K, v: ExportSettings[K]) =>
@@ -161,16 +165,12 @@ export function ExportPanel({
         </label>
 
         {!audioOnly && (
-          <label className="field small">
+          <label
+            className="field small"
+            title="Set under Gate ▸ Framing & Output, because the frame rate changes the picture: it decides the cadence."
+          >
             <span>FPS</span>
-            <input
-              type="number"
-              min={1}
-              max={120}
-              value={value.fps}
-              onChange={(e) => set('fps', Math.max(1, Math.min(120, Number(e.target.value) || 30)))}
-              disabled={busy}
-            />
+            <input type="text" value={formatFps(fps)} readOnly disabled />
           </label>
         )}
 
@@ -228,19 +228,24 @@ export function ExportPanel({
           <strong>
             {outputSize.width}×{outputSize.height}
           </strong>{' '}
-          — the frame is the shape of the tube, so the aspect ratio you choose
-          under Tube Geometry is the aspect ratio of the file, with no bars baked
-          in.
+          {' '}at {formatFps(fps)} fps — the frame is the shape of the projected
+          picture, so the aspect chosen under Framing &amp; Output is the aspect of
+          the file, with no bars baked in.
+          {Math.abs(fps - filmFps) > 0.01 && (
+            <>
+              {' '}
+              {formatFps(filmFps)} fps film on {formatFps(fps)} fps video: frames
+              are held unevenly, which is the cadence a transfer really has.
+            </>
+          )}
           {upscale > 1.02 && (
             <>
               {' '}
-              Upscaling {upscale.toFixed(1)}×: the scanlines, mask and glow are
-              generated at this resolution rather than stretched, so the CRT
-              structure is genuinely sharper. The photographic detail underneath
-              is still whatever the source had.
+              Upscaling {upscale.toFixed(1)}×: grain is generated at this resolution
+              rather than stretched, so it stays grain. The photographic detail
+              underneath is still whatever the source had.
             </>
           )}
-          {upscale < 0.98 && ' Downscaling: the mask will start to alias — keep the pitch coarse.'}
         </p>
       )}
 
@@ -255,9 +260,9 @@ export function ExportPanel({
             onCommit={(v) => set('stillDuration', Math.max(0.1, Math.min(3600, v)))}
           />
           <span className="range-note">
-            The still is held for this long while the effects run over it — drift,
-            hum bar, snow, wobble — so the result is a moving picture rather than a
-            frozen frame.
+            The still is held for this long while the film runs over it — new
+            grain every frame, weave, flicker, dirt — so the result is a moving
+            picture rather than a frozen frame.
           </span>
         </div>
       )}
@@ -298,7 +303,7 @@ export function ExportPanel({
       {isDesktop && ffmpeg === false && (
         <p className="warn">
           ffmpeg was not found, so the .mp4/.mov/.gif targets are hidden. Install the optional
-          <code> ffmpeg-static </code> dependency, or set <code>CRTBOX_FFMPEG</code> to a binary.
+          <code> ffmpeg-static </code> dependency, or set <code>FILMBOX_FFMPEG</code> to a binary.
         </p>
       )}
 
@@ -329,4 +334,8 @@ export function ExportPanel({
       {status && <p className={`status${status.startsWith('Error') ? ' error' : ''}`}>{status}</p>}
     </div>
   );
+}
+
+function formatFps(fps: number): string {
+  return Number.isInteger(fps) ? String(fps) : fps.toFixed(3).replace(/0+$/, '');
 }

@@ -7,7 +7,6 @@
  * "whenever it is available" turns out not to be always:
  *
  *   - WebGL2 can be missing, blacklisted by the driver, or disabled by policy.
- *     The app previously refused to start at all in that case.
  *   - Headless and batch renders on a server have no GPU, and the software
  *     paths that stand in for one sometimes return black frames rather than
  *     failing honestly.
@@ -18,9 +17,8 @@
  * Automatic is the sensible default: try the GPU, fall back rather than fail.
  */
 
-import { CrtRenderer, RenderFrame } from './renderer';
+import { FilmRenderer, RenderFrame, RenderTelemetry } from './renderer';
 import { CpuRenderer } from './cpu/renderer';
-import type { RenderTelemetry } from './state';
 
 /**
  * What both backends can take as a frame.
@@ -42,10 +40,12 @@ export type BackendKind = 'gpu' | 'cpu';
 /** What both backends implement. */
 export interface Renderer {
   readonly sourceSize: { width: number; height: number };
-  setSource(source: FrameSource | null, width: number, height: number): void;
+  /** Upload the source picture for one film frame. */
+  setSource(source: FrameSource | null, width: number, height: number, filmFrame?: number): void;
+  /** Whether the source for this film frame is already uploaded. */
+  hasFrame(filmFrame: number): boolean;
   render(f: RenderFrame): RenderTelemetry;
   resetHistory(): void;
-  triggerDegauss(now: number): void;
   dispose(): void;
 }
 
@@ -69,12 +69,10 @@ export function createRenderer(canvas: HTMLCanvasElement, choice: BackendChoice)
   }
 
   try {
-    return { renderer: new CrtRenderer(canvas), kind: 'gpu', fellBack: null };
+    return { renderer: new FilmRenderer(canvas), kind: 'gpu', fellBack: null };
   } catch (err) {
     const why = err instanceof Error ? err.message : String(err);
     if (choice === 'gpu') throw err;
-    // Automatic: a machine without a usable GPU gets the CPU path rather than
-    // an error page.
     return { renderer: new CpuRenderer(canvas), kind: 'cpu', fellBack: why };
   }
 }

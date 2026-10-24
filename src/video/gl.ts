@@ -204,6 +204,31 @@ export class Uniforms {
     if (l) this.gl.uniform4f(l, x, y, z, w);
   }
 
+  f1v(name: string, values: Float32Array | number[]): void {
+    const l = this.loc(name);
+    if (l) this.gl.uniform1fv(l, values);
+  }
+
+  v2v(name: string, values: Float32Array | number[]): void {
+    const l = this.loc(name);
+    if (l) this.gl.uniform2fv(l, values);
+  }
+
+  v4v(name: string, values: Float32Array | number[]): void {
+    const l = this.loc(name);
+    if (l) this.gl.uniform4fv(l, values);
+  }
+
+  /** A 3×3 matrix given row-major, as it is everywhere on the CPU side. */
+  m3(name: string, rowMajor: number[]): void {
+    const l = this.loc(name);
+    if (!l) return;
+    const m = rowMajor;
+    // GLSL matrices are column-major; transpose rather than rely on the
+    // transpose flag, which WebGL 1 forbade and some drivers still mishandle.
+    this.gl.uniformMatrix3fv(l, false, [m[0], m[3], m[6], m[1], m[4], m[7], m[2], m[5], m[8]]);
+  }
+
   tex(name: string, unit: number, texture: WebGLTexture | null): void {
     const l = this.loc(name);
     if (!l) return;

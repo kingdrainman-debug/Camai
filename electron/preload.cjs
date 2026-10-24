@@ -9,12 +9,12 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
-contextBridge.exposeInMainWorld('crtbox', {
+contextBridge.exposeInMainWorld('filmbox', {
   isDesktop: true,
   platform: process.platform,
   // Set by the main process via webPreferences.additionalArguments. More
   // reliable than sniffing the URL, which does not survive loadFile cleanly.
-  isBatch: process.argv.includes('--crtbox-batch'),
+  isBatch: process.argv.includes('--filmbox-batch'),
 
   openMedia: () => ipcRenderer.invoke('dialog:openMedia'),
   chooseSavePath: (defaultName, filters) =>

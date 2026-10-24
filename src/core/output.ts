@@ -1,16 +1,19 @@
+import type { Settings } from './params';
+import { geometry } from '../film/clock';
+
 /**
  * Output framing.
  *
  * One place decides the shape of a rendered frame, because the preview and the
  * export have to agree. They did not: the export took the source dimensions and
- * multiplied by a scale factor, while the tube pass pillarboxes the raster
- * inside whatever frame it is handed. Choose 4:3 on a 16:9 source and you got a
- * 16:9 file with the tube floating in the middle of it — the aspect setting
- * changed the picture but never the file.
+ * multiplied by a scale factor, while the shader letterboxed the picture inside
+ * whatever frame it was handed. Choose 4:3 on a 16:9 source and you got a 16:9
+ * file with bars baked in — the aspect setting changed the picture but never
+ * the file. Film has stronger opinions about aspect than television ever did,
+ * so the frame is always computed from the projection aspect, here.
  *
- * Height is the quantity that is preserved, not width. Line count, mask pitch
- * and scanline structure are all vertical, so matching the source height keeps
- * the texture of the picture and only the framing changes.
+ * Height is the quantity that is preserved, not width, so matching the source
+ * height keeps the detail of the picture and only the framing changes.
  */
 
 export type ResolutionTarget =
@@ -50,15 +53,13 @@ export const RESOLUTION_TARGETS: { value: ResolutionTarget; label: string }[] = 
 ];
 
 /**
- * The aspect ratio of the tube itself, which is what the frame should be.
+ * The aspect ratio of the projected picture, which is what the frame should be.
  *
- * Mirrors the branch in tube.frag.glsl; the two must not drift, or the preview
- * would letterbox differently from the file.
+ * Comes from the same geometry the renderers use, so the preview, the export
+ * and the shaders can never disagree about the shape of the frame.
  */
-export function tubeAspect(aspectMode: string, srcWidth: number, srcHeight: number): number {
-  if (aspectMode === '4:3') return 4 / 3;
-  if (aspectMode === '16:9') return 16 / 9;
-  return Math.max(srcWidth, 1) / Math.max(srcHeight, 1);
+export function frameAspect(settings: Settings, srcWidth: number, srcHeight: number): number {
+  return geometry(settings, srcWidth, srcHeight).outAspect;
 }
 
 /** Encoders want even dimensions; an odd one fails or silently crops. */
@@ -77,12 +78,12 @@ function evenize(n: number): number {
 export function outputSize(
   srcWidth: number,
   srcHeight: number,
-  aspectMode: string,
+  settings: Settings,
   target: ResolutionTarget,
   customHeight: number,
   scale = 1,
 ): OutputSize {
-  const aspect = tubeAspect(aspectMode, srcWidth, srcHeight);
+  const aspect = frameAspect(settings, srcWidth, srcHeight);
   const baseHeight =
     target === 'source'
       ? Math.max(srcHeight, 2)
@@ -97,9 +98,9 @@ export function outputSize(
 /**
  * Is this render asking for more pixels than the source has?
  *
- * Used to tell the user plainly when they are upscaling, since the CRT
- * structure is generated at the output resolution and genuinely gains detail,
- * while the underlying photographic detail cannot.
+ * Used to tell the user plainly when they are upscaling, since the grain is
+ * generated at the output resolution and genuinely gains detail, while the
+ * underlying photographic detail cannot.
  */
 export function upscaleFactor(srcHeight: number, out: OutputSize): number {
   return out.height / Math.max(srcHeight, 1);

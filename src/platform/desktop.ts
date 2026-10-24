@@ -61,12 +61,12 @@ export interface DesktopBridge {
 
 declare global {
   interface Window {
-    crtbox?: DesktopBridge;
+    filmbox?: DesktopBridge;
   }
 }
 
 export const desktop: DesktopBridge | null =
-  typeof window !== 'undefined' && window.crtbox ? window.crtbox : null;
+  typeof window !== 'undefined' && window.filmbox ? window.filmbox : null;
 
 export const isDesktop = !!desktop;
 

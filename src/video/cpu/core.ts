@@ -14,6 +14,7 @@
  */
 
 export const TAU = Math.PI * 2;
+export const PI = Math.PI;
 
 /** A mutable RGBA float image. */
 export interface Buf {
@@ -139,6 +140,19 @@ export function hash12(px: number, py: number): number {
   y += dot;
   z += dot;
   return fract((x + y) * z);
+}
+
+/** Two independent values from a 2D point, as hash22 does. */
+export function hash22(px: number, py: number, out: Float32Array): void {
+  let x = fract(px * 0.1031);
+  let y = fract(py * 0.103);
+  let z = fract(px * 0.0973);
+  const dot = x * (y + 33.33) + y * (z + 33.33) + z * (x + 33.33);
+  x += dot;
+  y += dot;
+  z += dot;
+  out[0] = fract((x + y) * z);
+  out[1] = fract((x + z) * y);
 }
 
 /** Three independent values from a 2D point, as hash32 does. */

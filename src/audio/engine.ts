@@ -512,7 +512,7 @@ export async function buildChain(
  * Realtime wrapper around {@link buildChain} that owns the AudioContext and the
  * MediaElementSource for the preview player.
  */
-export class CrtAudioEngine {
+export class FilmAudioEngine {
   private ctx: AudioContext | null = null;
   private source: MediaElementAudioSourceNode | null = null;
   private chain: AudioChain | null = null;
@@ -558,9 +558,9 @@ export class CrtAudioEngine {
 
   update(settings: Settings, telemetry: RenderTelemetry, time: number, playing: boolean): void {
     this.chain?.update(settings, {
-      humPhase: telemetry.humPhase,
-      glitch: telemetry.glitch,
-      powerOpen: telemetry.powerOpen,
+      humPhase: 0,
+      glitch: 0,
+      powerOpen: telemetry.lamp,
       time,
       playing,
     });

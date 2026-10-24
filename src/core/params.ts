@@ -1,19 +1,30 @@
 /**
- * CRTBOX parameter schema.
+ * FILMBOX parameter schema.
  *
  * This file is the single source of truth for the whole application. The
- * settings panel, the WebGL uniforms, the Web Audio graph, the preset format
- * and the CLI flags are all generated from it, so a parameter only ever has to
- * be described once.
+ * settings panel, the shader uniforms, the Web Audio graph, the preset format,
+ * the CLI flags, the randomiser and the keyframe timeline are all generated
+ * from it, so a parameter only ever has to be described once.
  *
  * Settings themselves are a flat `Record<dottedKey, number | boolean | string>`
  * which makes presets trivially diffable and hand-editable.
+ *
+ * The groups follow the chain a piece of film actually travels: light through
+ * a lens onto an emulsion (Lens, Stock), through a camera and a projector or a
+ * telecine (Gate), and then out through a soundtrack and a loudspeaker
+ * (Sound). Where a quantity is physical — a weave in micrometres of film, a
+ * lens in line pairs per millimetre — it is specified in those units and the
+ * format converts it, so that the same camera looks worse on Super 8 than on
+ * 35 mm for the reason it really did.
  */
+
+import { GAUGES, GAUGE_IDS } from '../film/formats';
+import { PRINT_STOCKS, STOCKS } from '../film/stocks';
 
 export type ParamValue = number | boolean | string;
 
 export interface ParamCommon {
-  /** Dotted key, e.g. `signal.dotCrawl`. Unique across the whole schema. */
+  /** Dotted key, e.g. `grain.amount`. Unique across the whole schema. */
   key: string;
   label: string;
   /** Shown in the panel as a tooltip; also used to generate the docs. */
@@ -31,7 +42,7 @@ export interface FloatParam extends ParamCommon {
   unit?: string;
   /** Slider travels logarithmically (frequencies, times). */
   log?: boolean;
-  /** Excluded from the randomiser (geometry trims, output levels, …). */
+  /** Excluded from the randomiser (framing, output levels, …). */
   noRandom?: boolean;
 }
 
@@ -67,12 +78,13 @@ export interface EnumParam extends ParamCommon {
 
 export type Param = FloatParam | IntParam | BoolParam | EnumParam;
 
+export type GroupKind = 'global' | 'stock' | 'lens' | 'gate' | 'audio' | 'link';
+
 export interface Group {
   id: string;
   label: string;
-  /** Which pane the group lives in. */
-  /** 'global' groups hold settings surfaced outside the tabs. */
-  kind: 'global' | 'tape' | 'video' | 'audio' | 'link';
+  /** Which tab the group lives in. 'global' groups are never drawn as a tab. */
+  kind: GroupKind;
   hint?: string;
   /** Key of the bool param that arms/disarms the whole group. */
   enableKey?: string;
@@ -87,124 +99,142 @@ export type Settings = Record<string, ParamValue>;
  * Shared enum vocabularies
  * ------------------------------------------------------------------ */
 
-const SIGNAL_PATHS: EnumOption[] = [
-  { value: 'rf', label: 'RF / Antenna', code: 0, hint: 'Modulated onto a carrier. Worst case: snow, ghosting, interference, heavy chroma damage.' },
-  { value: 'composite', label: 'Composite (CVBS)', code: 1, hint: 'Luma and chroma share one wire. The classic dot crawl and rainbow artefacts.' },
-  { value: 'svideo', label: 'S-Video (Y/C)', code: 2, hint: 'Luma and chroma separated. No dot crawl, but chroma is still narrow-band.' },
-  { value: 'component', label: 'Component (YPbPr)', code: 3, hint: 'Cleanest analogue path. Only the tube itself degrades the picture.' },
+const GAUGE_OPTIONS: EnumOption[] = GAUGE_IDS.map((id, i) => ({
+  value: id,
+  label: GAUGES[id].label,
+  code: i,
+  hint: `${GAUGES[id].width} × ${GAUGES[id].height} mm, ${GAUGES[id].fps} fps native.`,
+}));
+
+const STOCK_OPTIONS: EnumOption[] = STOCKS.map((s, i) => ({
+  value: s.id,
+  label: s.label,
+  code: i,
+  hint: s.note,
+}));
+
+const PRINT_OPTIONS: EnumOption[] = PRINT_STOCKS.map((s, i) => ({
+  value: s.id,
+  label: s.label,
+  code: i,
+  hint: s.note,
+}));
+
+const CAMERA_SPEEDS: EnumOption[] = [
+  { value: 'native', label: 'Native for the gauge', code: 0, hint: '16 fps for Regular 8, 18 for Super 8, 24 for everything else.' },
+  { value: '12', label: '12 fps', code: 12 },
+  { value: '16', label: '16 fps (silent)', code: 16 },
+  { value: '18', label: '18 fps (Super 8)', code: 18 },
+  { value: '24', label: '24 fps (sound)', code: 24 },
+  { value: '25', label: '25 fps (PAL television)', code: 25 },
 ];
 
-const MASK_TYPES: EnumOption[] = [
-  { value: 'none', label: 'None', code: 0 },
-  { value: 'aperture', label: 'Aperture grille', code: 1, hint: 'Trinitron/Diamondtron. Continuous vertical RGB stripes, no vertical structure.' },
-  { value: 'slot', label: 'Slot mask', code: 2, hint: 'Most consumer TVs. Vertical stripes broken into staggered slots.' },
-  { value: 'shadow', label: 'Shadow mask (triad)', code: 3, hint: 'Delta-gun dot triads on a hex lattice. Softest, most "TV-like".' },
+const PROJECTOR_SPEEDS: EnumOption[] = [
+  { value: 'match', label: 'Same as the camera', code: 0 },
+  { value: '16', label: '16 fps', code: 16 },
+  { value: '18', label: '18 fps', code: 18 },
+  { value: '24', label: '24 fps', code: 24 },
+  { value: '25', label: '25 fps', code: 25 },
 ];
 
-const SCAN_MODES: EnumOption[] = [
-  { value: 'progressive', label: '240p progressive', code: 0, hint: 'Every field draws the same lines. Fat, obvious scanlines.' },
-  { value: 'interlaced', label: '480i interlaced', code: 1, hint: 'Alternating fields. Finer lines, characteristic 30 Hz shimmer.' },
-  { value: 'none', label: 'No line structure', code: 2 },
+const OUTPUT_RATES: EnumOption[] = [
+  { value: 'film', label: 'Film rate (one frame per frame)', code: 0 },
+  { value: '23.976', label: '23.976', code: 1 },
+  { value: '24', label: '24', code: 2 },
+  { value: '25', label: '25 (PAL)', code: 3 },
+  { value: '29.97', label: '29.97 (NTSC)', code: 4 },
+  { value: '30', label: '30', code: 5 },
+  { value: '50', label: '50', code: 6 },
+  { value: '59.94', label: '59.94', code: 7 },
 ];
 
 const ASPECTS: EnumOption[] = [
-  { value: '4:3', label: '4:3', code: 0 },
-  { value: '16:9', label: '16:9', code: 1 },
-  { value: 'source', label: 'Match source', code: 2 },
+  { value: 'gate', label: 'Full camera gate', code: 0, hint: 'Whatever shape the format’s aperture is: 1.44 for Super 8, 1.37 for 16 mm, 1.69 for Super 16.' },
+  { value: '1.33', label: '1.33 (4:3)', code: 1 },
+  { value: '1.37', label: '1.37 Academy', code: 2 },
+  { value: '1.66', label: '1.66 European', code: 3 },
+  { value: '1.78', label: '1.78 (16:9)', code: 4 },
+  { value: '1.85', label: '1.85 American', code: 5 },
+  { value: '2.39', label: '2.39 Scope', code: 6 },
+  { value: 'source', label: 'Match source', code: 7 },
 ];
 
-/* ------------------------------------------------------------------ *
- * Tape engine vocabularies
- *
- * Names and values follow ntsc-rs's own setting ids wherever there is a
- * counterpart, so anyone who knows that tool can find the same control here
- * and a value means the same thing in both.
- * ------------------------------------------------------------------ */
-
-const TAPE_SPEEDS: EnumOption[] = [
-  { value: 'sp', label: 'SP — standard play', code: 0, hint: 'Two hours on an E180. The best a domestic VHS deck managed: roughly 3 MHz of luma.' },
-  { value: 'lp', label: 'LP — long play', code: 1, hint: 'Half the tape speed, noticeably softer, and the chroma starts to go.' },
-  { value: 'ep', label: 'EP/SLP — extended play', code: 2, hint: 'Six hours on one cassette. Barely 2 MHz of luma, chroma almost gone. The look of a tape recorded by someone who cared more about fitting it all on.' },
-  { value: 'none', label: 'No tape (broadcast)', code: 3, hint: 'Skip the tape stage entirely and keep only the composite signal model.' },
+const PROCESSES: EnumOption[] = [
+  { value: 'print', label: 'Contact print', code: 0, hint: 'Printed onto print stock through the printer lights, as every release print was. The print’s own curve is where most of the film look comes from.' },
+  { value: 'scan', label: 'Scanned negative', code: 1, hint: 'The negative scanned and inverted digitally — the modern route. Flatter, with all of the negative’s latitude and none of the print’s roll-off.' },
+  { value: 'raw', label: 'The negative itself', code: 2, hint: 'Show the developed negative as it sits on a light box: inverted, and orange from its mask.' },
 ];
 
-const DEMOD_FILTERS: EnumOption[] = [
-  { value: 'box', label: 'Box', code: 0, hint: 'A flat moving average. Cheapest and worst: maximum dot crawl and rainbows, which is exactly what a cheap set did.' },
-  { value: 'notch', label: 'Notch', code: 1, hint: 'Notches out the subcarrier. Cleaner luma, but it takes real detail with it.' },
-  { value: 'oneline', label: '1-line comb', code: 2, hint: 'Compares against the line above. Cancels most dot crawl at the cost of vertical colour fringing on horizontal edges.' },
-  { value: 'twoline', label: '2-line comb', code: 3, hint: 'Compares against the lines above and below. What a good late-model set used — clean, with artefacts only where the picture moves vertically.' },
+const LIGHTS: EnumOption[] = [
+  { value: 'matched', label: 'Matched to the stock', code: 0, hint: 'The footage is treated as lit for the stock, so no cast.' },
+  { value: 'daylight', label: 'Daylight (5500 K)', code: 1 },
+  { value: 'tungsten', label: 'Tungsten (3200 K)', code: 2 },
+  { value: 'overcast', label: 'Overcast / shade (7500 K)', code: 3 },
+  { value: 'fluorescent', label: 'Fluorescent tube', code: 4, hint: 'A spiky spectrum film never liked: everything goes green.' },
 ];
 
-const PHASE_SHIFTS: EnumOption[] = [
-  { value: '0', label: '0°', code: 0 },
-  { value: '90', label: '90°', code: 1, hint: 'The classic four-field NTSC sequence. Dot crawl creeps diagonally.' },
-  { value: '180', label: '180°', code: 2, hint: 'Two-field alternation. Dot crawl creeps straight up.' },
-  { value: '270', label: '270°', code: 3 },
+const STORAGE: EnumOption[] = [
+  { value: 'vault', label: 'Cold vault (−5 °C)', code: 0 },
+  { value: 'cool', label: 'Cool cupboard', code: 1 },
+  { value: 'room', label: 'Room temperature', code: 2 },
+  { value: 'warm', label: 'Warm and humid', code: 3 },
+  { value: 'loft', label: 'A loft that bakes every summer', code: 4 },
 ];
 
-const RECONSTRUCT: EnumOption[] = [
-  { value: 'nearest', label: 'Nearest (hard pixels)', code: 0, hint: 'No interpolation. For pixel art and 8/16-bit capture, where a soft upscale is simply wrong.' },
-  { value: 'bilinear', label: 'Bilinear', code: 1, hint: 'What the GPU does for free. Soft, slightly mushy on a big upscale.' },
-  { value: 'bicubic', label: 'Bicubic (Catmull-Rom)', code: 2, hint: 'Four-tap cubic with a touch of overshoot. The best default when rendering above the source resolution.' },
+const BLADES: EnumOption[] = [
+  { value: '0', label: 'None — direct transfer', code: 0, hint: 'A telecine or scanner. Continuous light, no shutter to beat against.' },
+  { value: '2', label: 'Two-blade shutter', code: 2 },
+  { value: '3', label: 'Three-blade shutter', code: 3, hint: 'What most 8 mm and 16 mm projectors used, to push flicker above what the eye notices at 16–18 fps.' },
+];
+
+const MAINS: EnumOption[] = [
+  { value: '50', label: '50 Hz', code: 50 },
+  { value: '60', label: '60 Hz', code: 60 },
+];
+
+const FIELD_ORDERS: EnumOption[] = [
+  { value: 'upper', label: 'Upper field first', code: 0 },
+  { value: 'lower', label: 'Lower field first', code: 1 },
+];
+
+const SPLICE_KINDS: EnumOption[] = [
+  { value: 'tape', label: 'Tape splice', code: 0, hint: 'Clear tape across the join. Its edges show for a frame either side and the frames under it go hazy.' },
+  { value: 'cement', label: 'Cement splice', code: 1, hint: 'Overlapped and welded. A thin line at the frame line and a frame that is slightly denser.' },
+];
+
+const TRACK_TYPES: EnumOption[] = [
+  { value: 'magnetic', label: 'Magnetic stripe', code: 0, hint: 'A narrow stripe of oxide along the edge of the film. Super 8 sound.' },
+  { value: 'optical-va', label: 'Optical, variable area', code: 1, hint: 'A wiggling clear line photographed beside the picture. The cinema standard.' },
+  { value: 'optical-vd', label: 'Optical, variable density', code: 2, hint: 'A band of varying grey. Older; distorts through the film’s own curve.' },
+  { value: 'silent', label: 'Silent film', code: 3, hint: 'No soundtrack at all — just the projector in the room.' },
 ];
 
 const CHANNEL_MODES: EnumOption[] = [
+  { value: 'mono', label: 'Mono (L+R)', code: 1, hint: 'A film soundtrack is one channel. This is what any projector would have played.' },
   { value: 'stereo', label: 'Stereo', code: 0 },
-  { value: 'mono', label: 'Mono (L+R)', code: 1, hint: 'How every pre-1984 set and most sets after it actually played back.' },
   { value: 'left', label: 'Left only', code: 2 },
   { value: 'right', label: 'Right only', code: 3 },
-  { value: 'side', label: 'Difference (L−R)', code: 4, hint: 'The MTS stereo subcarrier on its own. Centre-panned dialogue vanishes — deeply uncanny.' },
+];
+
+const PLAYBACK_CURVES: EnumOption[] = [
+  { value: 'flat', label: 'Flat', code: 0 },
+  { value: 'academy', label: 'Academy curve', code: 1, hint: 'The deliberate treble roll-off cinema playback applied from 1938 into the 1970s, to hide the hiss of the optical track.' },
+  { value: 'projector', label: 'Home projector amp', code: 2, hint: 'A small sound projector’s amplifier: narrow, mid-forward, built to be heard over its own motor.' },
 ];
 
 const SATURATION_MODELS: EnumOption[] = [
-  { value: 'tape', label: 'Tape', code: 0, hint: 'Soft symmetric compression, 3rd-harmonic dominant.' },
-  { value: 'transformer', label: 'Transformer', code: 1, hint: 'Hysteresis-flavoured, low-frequency-dependent, adds 2nd harmonic.' },
-  { value: 'transistor', label: 'Output stage', code: 2, hint: 'Hard asymmetric clip. What a cheap TV amp does when you turn it up.' },
+  { value: 'valve', label: 'Valve', code: 0, hint: 'Soft, even-harmonic. A cinema amplifier before the 1970s.' },
+  { value: 'transistor', label: 'Transistor', code: 1, hint: 'Harder and odd-harmonic. A home projector from the 1970s on.' },
 ];
-
-const HUM_MODES: EnumOption[] = [
-  { value: 'ground', label: 'Ground loop', code: 0, hint: 'Odd harmonics of the mains fundamental. A buzz, not a hum.' },
-  { value: 'transformer', label: 'Transformer', code: 1, hint: 'Magnetostriction happens at twice the line frequency — 100/120 Hz dominant.' },
-  { value: 'both', label: 'Both', code: 2 },
-];
-
-const REGIONS: EnumOption[] = [
-  { value: 'ntsc', label: 'NTSC (60 Hz / 15.734 kHz)', code: 0 },
-  { value: 'pal', label: 'PAL (50 Hz / 15.625 kHz)', code: 1 },
-];
-
-const POWER_STATES: EnumOption[] = [
-  { value: 'on', label: 'On', code: 0 },
-  { value: 'warming', label: 'Warming up', code: 1, hint: 'Picture blooms open from a horizontal line as the tube heats.' },
-  { value: 'collapsing', label: 'Powering off', code: 2, hint: 'The picture collapses to a line, then a dot that fades.' },
-];
-
-/* ------------------------------------------------------------------ *
- * Video groups
- * ------------------------------------------------------------------ */
-
-/* ------------------------------------------------------------------ *
- * Tape engine
- *
- * The second of the two emulators. Where the tube engine models the glass and
- * the set, this models everything upstream of it: the composite signal itself,
- * encoded onto a subcarrier and decoded back off it, and the videotape it was
- * recorded on. The artefacts here are not drawn on — dot crawl and rainbows
- * fall out of modulating and demodulating for real, which is the whole point.
- * ------------------------------------------------------------------ */
 
 /* ------------------------------------------------------------------ *
  * Engine masters
  *
- * One switch per emulator. Each section already has its own bypass, but
- * turning off "the VHS" meant flipping four of them and turning off "the CRT"
- * meant flipping ten, which is not a thing anyone wants to do twice.
- *
- * They are real parameters rather than interface state so that they travel in
- * a preset: a look that is meant to be a clean signal on a bad tube, or a bad
- * tape shown flat, says so in the file rather than depending on which switches
- * the last person happened to leave down. The group is kind 'global', so it is
- * never drawn as a tab — the switches live on the tab bar itself.
+ * One switch per engine. Each section already has its own bypass, but turning
+ * off "the stock" meant flipping seven of them, which is not a thing anyone
+ * wants to do twice. They are real parameters rather than interface state so
+ * that they travel in a preset, and they fold down into the section switches
+ * (see applyEngineMasters) so that the renderers never learn about them.
  * ------------------------------------------------------------------ */
 
 const ENGINE_GROUP: Group[] = [
@@ -212,356 +242,351 @@ const ENGINE_GROUP: Group[] = [
     id: 'engine',
     label: 'Engines',
     kind: 'global',
-    hint: 'Master bypass for each of the two emulators.',
+    hint: 'Master bypass for each of the three engines.',
     params: [
-      { key: 'engine.tape', type: 'bool', label: 'Tape engine', def: true, noRandom: true, hint: 'The whole signal half: composite encode and decode, the videotape, signal noise and head switching.' },
-      { key: 'engine.tube', type: 'bool', label: 'Tube engine', def: true, noRandom: true, hint: 'The whole display half: reception, geometry, beam, phosphor, glow, tube response and wear.' },
-    ],
-  },
-];
-
-const TAPE_GROUPS: Group[] = [
-  {
-    id: 'composite',
-    label: 'Composite Signal',
-    kind: 'tape',
-    enableKey: 'composite.enabled',
-    hint: 'Luma and chroma are encoded onto one wire at a colour subcarrier and taken off again. Every artefact in this section emerges from that round trip rather than being painted on.',
-    params: [
-      { key: 'composite.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
-      { key: 'composite.bandwidthScale', type: 'float', label: 'Bandwidth scale', min: 0.125, max: 8, step: 0.001, def: 1, log: true, hint: 'Scales every frequency in the model at once. Raise it to keep the same look when you render at a higher resolution.' },
-      { key: 'composite.demodulation', type: 'enum', label: 'Chroma demodulation', options: DEMOD_FILTERS, def: 'box', noRandom: true, hint: 'How colour is separated back out of the composite signal. The single biggest decision in this section.' },
-      { key: 'composite.phaseShift', type: 'enum', label: 'Scanline phase shift', options: PHASE_SHIFTS, def: '180', noRandom: true, hint: 'How far the subcarrier advances from one line to the next. This is what makes dot crawl crawl.' },
-      { key: 'composite.phaseShiftOffset', type: 'int', label: 'Phase shift offset', min: 0, max: 3, def: 0, advanced: true, hint: 'Which field of the four-field sequence this frame starts on.' },
-      { key: 'composite.preemphasis', type: 'float', label: 'Preemphasis', min: -1, max: 2, step: 0.001, def: 1, hint: 'High frequencies are boosted before transmission and cut after, to beat the noise floor. Mismatch the two and you get the characteristic sharpened, ringing edge.' },
-      { key: 'composite.ringing', type: 'float', label: 'Ringing', min: 0, max: 1, step: 0.001, def: 0.4, hint: 'Overshoot from the band-limiting filter: a bright echo trailing every hard vertical edge.' },
-      { key: 'composite.ringingFrequency', type: 'float', label: 'Ringing frequency', min: 0, max: 1, step: 0.001, def: 0.45, advanced: true },
-      { key: 'composite.ringingPower', type: 'float', label: 'Ringing power', min: 1, max: 10, step: 0.01, def: 4, advanced: true },
-      { key: 'composite.chromaLowpassIn', type: 'float', label: 'Chroma lowpass in', min: 0, max: 1, step: 0.001, def: 0.5, hint: 'How hard colour is filtered before it is encoded. Real equipment filtered it heavily, because the chroma channel is narrow.' },
-      { key: 'composite.chromaLowpassOut', type: 'float', label: 'Chroma lowpass out', min: 0, max: 1, step: 0.001, def: 0.25, hint: 'And again after decoding, to hide the subcarrier residue.' },
-      { key: 'composite.chromaDelayH', type: 'float', label: 'Chroma delay H', min: -8, max: 8, step: 0.01, def: 0, unit: 'px', hint: 'Colour arrives late and sits to one side of the object it belongs to.' },
-      { key: 'composite.chromaDelayV', type: 'float', label: 'Chroma delay V', min: -4, max: 4, step: 0.01, def: 0, unit: 'px', advanced: true },
-      { key: 'composite.chromaPhaseError', type: 'float', label: 'Chroma phase error', min: 0, max: 1, step: 0.001, def: 0, hint: 'A constant error in the decoder reference phase, which rotates every hue at once.' },
-      { key: 'composite.lumaSmear', type: 'float', label: 'Luma smear', min: 0, max: 1, step: 0.001, def: 0, hint: 'Brightness drags to the right out of bright areas, as the amplifier fails to settle.' },
-    ],
-  },
-  {
-    id: 'tape',
-    label: 'VHS Tape',
-    kind: 'tape',
-    enableKey: 'tape.enabled',
-    hint: 'What a domestic videotape did to the signal on the way to being stored and read back. Tape speed is the master control: everything else here is a deck that has seen some use.',
-    params: [
-      { key: 'tape.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
-      { key: 'tape.speed', type: 'enum', label: 'Tape speed', options: TAPE_SPEEDS, def: 'lp', noRandom: true, hint: 'Sets the luma and chroma bandwidth together, exactly as the real recording mode did.' },
-      { key: 'tape.chromaLoss', type: 'float', label: 'Chroma loss', min: 0, max: 1, step: 0.001, def: 0, hint: 'Colour drops out entirely on random lines, which is what a worn tape does long before brightness goes.' },
-      { key: 'tape.chromaVertBlend', type: 'bool', label: 'Chroma vertical blend', def: true, hint: 'VHS averages colour between adjacent lines to save bandwidth. Leave it on for a real tape.' },
-      { key: 'tape.sharpen', type: 'float', label: 'Output sharpen', min: 0, max: 5, step: 0.001, def: 1.5, hint: 'The deck tried to put back the detail the tape lost, and overdid it. This halo is one of the most recognisable VHS signatures.' },
-      { key: 'tape.sharpenFrequency', type: 'float', label: 'Sharpen frequency', min: 0.5, max: 4, step: 0.001, def: 1, advanced: true },
-      { key: 'tape.edgeWave', type: 'float', label: 'Edge wave', min: 0, max: 20, step: 0.01, def: 1, unit: 'px', hint: 'The left edge of the picture ripples as the tape wanders against the head.' },
-      { key: 'tape.edgeWaveSpeed', type: 'float', label: 'Edge wave speed', min: 0, max: 10, step: 0.01, def: 4, advanced: true },
-      { key: 'tape.edgeWaveFrequency', type: 'float', label: 'Edge wave frequency', min: 0, max: 1, step: 0.001, def: 0.05, advanced: true },
-      { key: 'tape.edgeWaveDetail', type: 'int', label: 'Edge wave detail', min: 1, max: 5, def: 2, advanced: true },
-    ],
-  },
-  {
-    id: 'vnoise',
-    label: 'Signal Noise',
-    kind: 'tape',
-    enableKey: 'vnoise.enabled',
-    hint: 'Noise added in the signal domain rather than on the finished picture, so it is encoded, filtered and decoded along with everything else — which is why it lands as bands and streaks rather than as film grain.',
-    params: [
-      { key: 'vnoise.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
-      { key: 'vnoise.compositeNoise', type: 'float', label: 'Composite noise', min: 0, max: 1, step: 0.001, def: 0.01, hint: 'Noise on the composite signal itself, before anything is decoded. Affects brightness and colour together, the way real noise does.' },
-      { key: 'vnoise.compositeNoiseFrequency', type: 'float', label: 'Composite noise frequency', min: 0, max: 1, step: 0.001, def: 0.5, advanced: true },
-      { key: 'vnoise.compositeNoiseDetail', type: 'int', label: 'Composite noise detail', min: 1, max: 5, def: 1, advanced: true, hint: 'Octaves of noise. More detail is finer and busier.' },
-      { key: 'vnoise.lumaNoise', type: 'float', label: 'Luma noise', min: 0, max: 1, step: 0.001, def: 0.01, hint: 'Noise on brightness alone, after decoding.' },
-      { key: 'vnoise.lumaNoiseFrequency', type: 'float', label: 'Luma noise frequency', min: 0, max: 1, step: 0.001, def: 0.5, advanced: true },
-      { key: 'vnoise.lumaNoiseDetail', type: 'int', label: 'Luma noise detail', min: 1, max: 5, def: 1, advanced: true },
-      { key: 'vnoise.chromaNoise', type: 'float', label: 'Chroma noise', min: 0, max: 1, step: 0.001, def: 0.05, hint: 'Noise on colour alone. Low-frequency chroma noise is the blotchy colour of a tired tape.' },
-      { key: 'vnoise.chromaNoiseFrequency', type: 'float', label: 'Chroma noise frequency', min: 0, max: 1, step: 0.001, def: 0.05, advanced: true },
-      { key: 'vnoise.chromaNoiseDetail', type: 'int', label: 'Chroma noise detail', min: 1, max: 5, def: 1, advanced: true },
-      { key: 'vnoise.chromaPhaseNoise', type: 'float', label: 'Chroma phase noise', min: 0, max: 1, step: 0.001, def: 0.01, hint: 'Random jitter in the decoder reference phase, so hue wanders line by line.' },
-      { key: 'vnoise.snow', type: 'float', label: 'Snow', min: 0, max: 1, step: 0.001, def: 0, hint: 'Sparse bright specks from dropouts in the signal, rather than the dense grain of tuner noise.' },
-      { key: 'vnoise.snowAnisotropy', type: 'float', label: 'Snow anisotropy', min: 0, max: 1, step: 0.001, def: 0.5, advanced: true, hint: 'How far each speck smears horizontally. At 1 they are streaks rather than dots.' },
-    ],
-  },
-  {
-    id: 'headswitch',
-    label: 'Head Switching & Tracking',
-    kind: 'tape',
-    enableKey: 'headswitch.enabled',
-    hint: 'The rotating head drum, and what happens when the tracking is not quite right. These are the faults that say "videotape" faster than anything else in the application.',
-    params: [
-      { key: 'headswitch.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
-      { key: 'headswitch.height', type: 'int', label: 'Head switching height', min: 0, max: 48, def: 8, unit: 'lines', hint: 'How many lines at the bottom of the picture are torn by the drum swapping heads.' },
-      { key: 'headswitch.offset', type: 'int', label: 'Head switching offset', min: 0, max: 48, def: 3, unit: 'lines', advanced: true },
-      { key: 'headswitch.shift', type: 'float', label: 'Horizontal shift', min: -100, max: 100, step: 0.1, def: 72, unit: 'px', hint: 'How far those lines are thrown sideways.' },
-      { key: 'headswitch.midLine', type: 'bool', label: 'Start mid-line', def: false, advanced: true, hint: 'The switch happens part way along a line rather than at its start, which is what really happened.' },
-      { key: 'headswitch.midLinePosition', type: 'float', label: 'Mid-line position', min: 0, max: 1, step: 0.001, def: 0.95, advanced: true },
-      { key: 'headswitch.midLineJitter', type: 'float', label: 'Mid-line jitter', min: 0, max: 1, step: 0.001, def: 0.1, advanced: true },
-      { key: 'headswitch.tracking', type: 'float', label: 'Tracking noise', min: 0, max: 1, step: 0.001, def: 0, hint: 'A band of torn, noisy picture drifting up the screen — the thing you used to fix by holding the tracking button down.' },
-      { key: 'headswitch.trackingHeight', type: 'int', label: 'Tracking band height', min: 0, max: 60, def: 24, unit: 'lines', advanced: true },
-      { key: 'headswitch.trackingWave', type: 'float', label: 'Tracking wave', min: 0, max: 1, step: 0.001, def: 0.5, advanced: true, hint: 'How much the band bends the picture sideways as well as adding noise.' },
-      { key: 'headswitch.trackingSnow', type: 'float', label: 'Tracking snow', min: 0, max: 1, step: 0.001, def: 0.5, advanced: true },
-    ],
-  },
-];
-
-const VIDEO_GROUPS: Group[] = [
-  {
-    id: 'picture',
-    label: 'Picture Controls',
-    kind: 'video',
-    hint: 'The knobs that were on the front of the set. Applied to the signal before it reaches the tube.',
-    params: [
-      { key: 'picture.brightness', type: 'float', label: 'Brightness', min: -0.5, max: 0.5, step: 0.001, def: 0.0, hint: 'Black level. Lifting it greys the blacks exactly as a mis-set CRT does.' },
-      { key: 'picture.contrast', type: 'float', label: 'Contrast', min: 0, max: 2, step: 0.001, def: 1.0, hint: 'Drive into the tube. Above 1.0 the beam blooms.' },
-      { key: 'picture.color', type: 'float', label: 'Colour', min: 0, max: 2, step: 0.001, def: 1.05, hint: 'Chroma gain. Consumer sets shipped oversaturated from the factory.' },
-      { key: 'picture.tint', type: 'float', label: 'Tint', min: -40, max: 40, step: 0.1, def: 0, unit: '°', hint: 'NTSC hue error — the reason it was nicknamed "Never Twice the Same Colour".' },
-      { key: 'picture.sharpness', type: 'float', label: 'Sharpness', min: 0, max: 2, step: 0.001, def: 1.0, hint: 'Peaking filter. Turning it up produces the classic white edge-ringing halo.' },
-      { key: 'picture.inputGamma', type: 'float', label: 'Source gamma', min: 1.0, max: 3.0, step: 0.01, def: 2.2, advanced: true, noRandom: true, hint: 'Gamma the source file is assumed to be encoded in.' },
-      { key: 'picture.reconstruct', type: 'enum', label: 'Source sampling', options: RECONSTRUCT, def: 'bicubic', noRandom: true, hint: 'How the source is read when the render resolution is higher than the file. Matters a great deal when upscaling.' },
-    ],
-  },
-  {
-    id: 'colour',
-    label: 'Colour',
-    kind: 'video',
-    enableKey: 'colour.enabled',
-    hint: 'Grey-scale tracking and chroma behaviour. A CRT was never colour-accurate: the white point drifted with brightness, the guns aged at different rates, and the colour decoder gave up on weak signals.',
-    params: [
-      { key: 'colour.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
-      { key: 'colour.temperature', type: 'float', label: 'Temperature', min: -1, max: 1, step: 0.001, def: 0, hint: 'Negative is warm (D65, what film and broadcast assumed); positive is the cold blue-white most sets actually shipped at, around 9300 K.' },
-      { key: 'colour.tintGM', type: 'float', label: 'Green / magenta', min: -1, max: 1, step: 0.001, def: 0, hint: 'The second white-balance axis. Ageing sets drift green as the green gun is driven hardest.' },
-      { key: 'colour.redGain', type: 'float', label: 'Red gain', min: 0, max: 2, step: 0.001, def: 1, advanced: true, hint: 'Per-gun drive. The service-menu controls.' },
-      { key: 'colour.greenGain', type: 'float', label: 'Green gain', min: 0, max: 2, step: 0.001, def: 1, advanced: true },
-      { key: 'colour.blueGain', type: 'float', label: 'Blue gain', min: 0, max: 2, step: 0.001, def: 1, advanced: true },
-      { key: 'colour.redLift', type: 'float', label: 'Red cutoff', min: -0.2, max: 0.2, step: 0.0005, def: 0, advanced: true, hint: 'Per-gun black level. Mis-set cutoffs are why old sets have coloured blacks.' },
-      { key: 'colour.greenLift', type: 'float', label: 'Green cutoff', min: -0.2, max: 0.2, step: 0.0005, def: 0, advanced: true },
-      { key: 'colour.blueLift', type: 'float', label: 'Blue cutoff', min: -0.2, max: 0.2, step: 0.0005, def: 0, advanced: true },
-      { key: 'colour.hue', type: 'float', label: 'Hue rotate', min: -180, max: 180, step: 0.1, def: 0, unit: '°', hint: 'Rotates the whole colour wheel. Unlike Tint this acts after decoding, so it cannot be cancelled out by the set.' },
-      { key: 'colour.saturation', type: 'float', label: 'Saturation', min: 0, max: 2, step: 0.001, def: 1, hint: 'Overall chroma, applied after the tube. Picture ▸ Colour is the front-panel knob upstream of it.' },
-      { key: 'colour.vibrance', type: 'float', label: 'Vibrance', min: 0, max: 1, step: 0.001, def: 0, hint: 'Lifts weak colours and leaves already-saturated ones alone. Flattering, and not remotely period-correct.' },
-      { key: 'colour.chromaCrush', type: 'float', label: 'Chroma crush', min: 0, max: 1, step: 0.001, def: 0, hint: 'Nearly-grey pixels collapse to grey. Tape chroma noise lived down here, so squashing it is what a noise reducer did.' },
-      { key: 'colour.colourKiller', type: 'float', label: 'Colour killer', min: 0, max: 1, step: 0.001, def: 0, hint: 'Below a burst-amplitude threshold the decoder mutes colour entirely rather than show confetti. Turn it up and a weak signal goes monochrome.' },
-      { key: 'colour.chromaClip', type: 'float', label: 'Chroma overload', min: 0.5, max: 2, step: 0.001, def: 2, advanced: true, hint: 'Where oversaturated colour stops getting more saturated and starts smearing. Low values give the blazing red bloom of overdriven composite.' },
-    ],
-  },
-  {
-    id: 'signal',
-    label: 'Signal & Reception',
-    kind: 'video',
-    enableKey: 'signal.enabled',
-    hint: 'Everything that happens to the picture between the transmitter and the video amplifier.',
-    params: [
-      { key: 'signal.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
-      { key: 'signal.path', type: 'enum', label: 'Signal path', options: SIGNAL_PATHS, def: 'composite', noRandom: true, hint: 'Sets the character of the artefacts below. Component bypasses most of them.' },
-      { key: 'signal.lumaBandwidth', type: 'float', label: 'Luma bandwidth', min: 0.4, max: 6.0, step: 0.01, def: 3.2, unit: 'MHz', hint: 'Broadcast NTSC allots 4.2 MHz; VHS manages barely 3. Lower = softer horizontally.' },
-      { key: 'signal.chromaBandwidth', type: 'float', label: 'Chroma bandwidth', min: 0.05, max: 2.0, step: 0.005, def: 0.55, unit: 'MHz', hint: 'Colour carries far less detail than brightness. This is why reds smear.' },
-      { key: 'signal.chromaDelay', type: 'float', label: 'Chroma delay', min: -6, max: 6, step: 0.01, def: 0.9, unit: 'px', hint: 'Colour arrives late and sits to the right of the object it belongs to.' },
-      { key: 'signal.dotCrawl', type: 'float', label: 'Dot crawl', min: 0, max: 1, step: 0.001, def: 0.35, hint: 'Chroma misread as luma: a ladder of dots creeping up sharp colour edges.' },
-      { key: 'signal.crossColor', type: 'float', label: 'Cross-colour (rainbow)', min: 0, max: 1, step: 0.001, def: 0.3, hint: 'Fine luma detail misread as colour. Herringbone jackets shimmer with rainbows.' },
-      { key: 'signal.ringing', type: 'float', label: 'Ringing', min: 0, max: 1, step: 0.001, def: 0.35, hint: 'Filter overshoot. A bright fringe trailing every hard vertical edge.' },
-      { key: 'signal.ringingFreq', type: 'float', label: 'Ringing frequency', min: 0.5, max: 8, step: 0.01, def: 3.0, advanced: true, hint: 'How tightly the overshoot oscillates.' },
-      { key: 'signal.ghosting', type: 'float', label: 'Ghosting', min: 0, max: 1, step: 0.001, def: 0.12, hint: 'Multipath: the signal also arrives via a reflection, offset to the right.' },
-      { key: 'signal.ghostDelay', type: 'float', label: 'Ghost delay', min: -80, max: 80, step: 0.1, def: 14, unit: 'px', advanced: true },
-      { key: 'signal.snow', type: 'float', label: 'Snow', min: 0, max: 1, step: 0.001, def: 0.06, hint: 'Thermal noise in the tuner. Coarse, fast, monochrome.' },
-      { key: 'signal.snowSize', type: 'float', label: 'Snow grain', min: 0.5, max: 8, step: 0.01, def: 1.6, unit: 'px', advanced: true },
-      { key: 'signal.signalLoss', type: 'float', label: 'Signal loss', min: 0, max: 1, step: 0.001, def: 0, hint: 'Master fade from picture to full static. Drives the audio static too when A/V link is on.' },
-      { key: 'signal.interference', type: 'float', label: 'Interference', min: 0, max: 1, step: 0.001, def: 0.05, hint: 'A beating carrier from a nearby channel: diagonal herringbone bars.' },
-      { key: 'signal.interferenceFreq', type: 'float', label: 'Interference pitch', min: 1, max: 200, step: 0.1, def: 48, advanced: true },
-      { key: 'signal.interferenceDrift', type: 'float', label: 'Interference drift', min: 0, max: 1, step: 0.001, def: 0.4, advanced: true },
-    ],
-  },
-  {
-    id: 'sync',
-    label: 'Sync & Timebase',
-    kind: 'video',
-    enableKey: 'sync.enabled',
-    hint: 'Faults in the circuits that decide where each line and each field starts.',
-    params: [
-      { key: 'sync.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
-      { key: 'sync.hJitter', type: 'float', label: 'Horizontal jitter', min: 0, max: 24, step: 0.01, def: 1.2, unit: 'px', hint: 'Each line starts at a slightly wrong time. The picture develops a ragged left edge.' },
-      { key: 'sync.jitterCorrelation', type: 'float', label: 'Jitter coherence', min: 0, max: 1, step: 0.001, def: 0.55, hint: 'At 0 every line is independent (noise). At 1 neighbouring lines agree (a wobble).' },
-      { key: 'sync.tearing', type: 'float', label: 'Line tearing', min: 0, max: 1, step: 0.001, def: 0.06, hint: 'Occasional lines thrown violently sideways.' },
-      { key: 'sync.flagging', type: 'float', label: 'Flagging', min: 0, max: 1, step: 0.001, def: 0.15, hint: 'The top few lines bend to the right — the timebase has not settled after the vertical interval.' },
-      { key: 'sync.headSwitch', type: 'float', label: 'Head-switch noise', min: 0, max: 1, step: 0.001, def: 0.2, hint: 'The torn, noisy band along the very bottom of every tape playback.' },
-      { key: 'sync.headSwitchHeight', type: 'float', label: 'Head-switch height', min: 0, max: 0.2, step: 0.001, def: 0.035, advanced: true },
-      { key: 'sync.vRoll', type: 'float', label: 'Vertical roll', min: -3, max: 3, step: 0.001, def: 0, unit: 'frames/s', hint: 'Vertical hold has lost lock and the picture scrolls.' },
-      { key: 'sync.vHold', type: 'float', label: 'Vertical hold instability', min: 0, max: 1, step: 0.001, def: 0, hint: 'Random bursts of rolling rather than a constant drift.' },
-      { key: 'sync.timebaseWobble', type: 'float', label: 'Timebase wobble', min: 0, max: 1, step: 0.001, def: 0.12, hint: 'Slow breathing of the picture width. Reads as "this is a tape".' },
-    ],
-  },
-  {
-    id: 'geometry',
-    label: 'Tube Geometry',
-    kind: 'video',
-    enableKey: 'geometry.enabled',
-    hint: 'The deflection yoke never scanned a perfect rectangle. These are the service-menu adjustments.',
-    params: [
-      { key: 'geometry.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
-      { key: 'geometry.curvatureX', type: 'float', label: 'Curvature H', min: 0, max: 0.6, step: 0.001, def: 0.14, hint: 'The glass bulges towards you. Straight lines bow outward.' },
-      { key: 'geometry.curvatureY', type: 'float', label: 'Curvature V', min: 0, max: 0.6, step: 0.001, def: 0.18 },
-      { key: 'geometry.cornerRadius', type: 'float', label: 'Corner radius', min: 0, max: 0.35, step: 0.001, def: 0.06, hint: 'How rounded the visible corners of the tube are.' },
-      { key: 'geometry.overscan', type: 'float', label: 'Overscan', min: 0, max: 0.25, step: 0.001, def: 0.045, hint: 'Sets deliberately scanned past the bezel. 4–8% of every edge was never seen.' },
-      { key: 'geometry.hSize', type: 'float', label: 'H size', min: 0.8, max: 1.2, step: 0.001, def: 1.0, noRandom: true },
-      { key: 'geometry.vSize', type: 'float', label: 'V size', min: 0.8, max: 1.2, step: 0.001, def: 1.0, noRandom: true },
-      { key: 'geometry.hPos', type: 'float', label: 'H position', min: -0.1, max: 0.1, step: 0.0005, def: 0, noRandom: true },
-      { key: 'geometry.vPos', type: 'float', label: 'V position', min: -0.1, max: 0.1, step: 0.0005, def: 0, noRandom: true },
-      { key: 'geometry.pincushion', type: 'float', label: 'Pincushion', min: -0.3, max: 0.3, step: 0.001, def: 0.02, advanced: true, hint: 'Edges pulled in or pushed out at the middle of each side.' },
-      { key: 'geometry.trapezoid', type: 'float', label: 'Trapezoid', min: -0.3, max: 0.3, step: 0.001, def: 0, advanced: true, hint: 'One end of the raster wider than the other.' },
-      { key: 'geometry.rotation', type: 'float', label: 'Rotation', min: -6, max: 6, step: 0.01, def: 0.25, unit: '°', advanced: true, hint: 'The yoke was glued on slightly crooked. Almost every set had a little.' },
-      { key: 'geometry.aspect', type: 'enum', label: 'Aspect', options: ASPECTS, def: '4:3', noRandom: true },
-    ],
-  },
-  {
-    id: 'beam',
-    label: 'Beam & Scanlines',
-    kind: 'video',
-    enableKey: 'beam.enabled',
-    hint: 'A CRT does not draw pixels. It draws a moving spot whose brightness varies along a line.',
-    params: [
-      { key: 'beam.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
-      { key: 'beam.scanMode', type: 'enum', label: 'Scan mode', options: SCAN_MODES, def: 'progressive', noRandom: true },
-      { key: 'beam.lineCount', type: 'int', label: 'Active lines', min: 100, max: 1080, def: 240, hint: '240 for a console or a home camcorder, 480 for broadcast interlaced.' },
-      { key: 'beam.scanlineDepth', type: 'float', label: 'Scanline depth', min: 0, max: 1, step: 0.001, def: 0.6, hint: 'How dark the unscanned gap between lines is.' },
-      { key: 'beam.beamWidth', type: 'float', label: 'Beam width', min: 0.2, max: 3.0, step: 0.001, def: 0.9, hint: 'Vertical thickness of the spot in scanline units. Wide beams fill in the gaps.' },
-      { key: 'beam.beamBloom', type: 'float', label: 'Beam blooming', min: 0, max: 1.5, step: 0.001, def: 0.55, hint: 'Bright lines get physically fatter. This, more than anything, is what makes a CRT look like a CRT.' },
-      { key: 'beam.beamShape', type: 'float', label: 'Beam profile', min: 0.5, max: 4, step: 0.01, def: 2.0, advanced: true, hint: '2.0 is a true Gaussian spot; higher is a squarer, more modern line.' },
-      { key: 'beam.brightBoost', type: 'float', label: 'Bright boost', min: 0.5, max: 3, step: 0.001, def: 1.0, hint: 'Extra gain on top of the beam. The light the scanlines throw away is already given back automatically, so 1.0 is correct exposure — this is the contrast knob, not a correction.' },
-      { key: 'beam.interlaceFlicker', type: 'float', label: 'Interlace flicker', min: 0, max: 1, step: 0.001, def: 0.35, hint: 'Only meaningful in 480i: the 30 Hz shimmer of alternating fields.' },
-      { key: 'beam.fieldBlend', type: 'float', label: 'Field blending', min: 0, max: 1, step: 0.001, def: 0.25, advanced: true },
-    ],
-  },
-  {
-    id: 'phosphor',
-    label: 'Phosphor & Mask',
-    kind: 'video',
-    enableKey: 'phosphor.enabled',
-    hint: 'The screen is a grid of red, green and blue phosphor dots behind a perforated steel mask.',
-    params: [
-      { key: 'phosphor.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
-      { key: 'phosphor.maskType', type: 'enum', label: 'Mask type', options: MASK_TYPES, def: 'slot', noRandom: true },
-      { key: 'phosphor.maskPitch', type: 'float', label: 'Mask pitch', min: 1.5, max: 16, step: 0.01, def: 3.0, unit: 'px', hint: 'Screen pixels per RGB triad. Below ~3 the mask turns into moiré rather than texture.' },
-      { key: 'phosphor.maskStrength', type: 'float', label: 'Mask strength', min: 0, max: 1, step: 0.001, def: 0.5 },
-      { key: 'phosphor.maskBoost', type: 'float', label: 'Mask compensation', min: 0.5, max: 3, step: 0.001, def: 1.0, advanced: true, hint: 'The mask blocks roughly two thirds of the light and that is compensated automatically, so 1.0 is correct. Push it if you want the mask to read as brighter than the tube really was.' },
-      { key: 'phosphor.slotStagger', type: 'float', label: 'Slot stagger', min: 0, max: 1, step: 0.001, def: 0.5, advanced: true, hint: 'Vertical offset of alternate slot columns. Only affects the slot mask.' },
-      { key: 'phosphor.persistence', type: 'float', label: 'Persistence', min: 0, max: 0.96, step: 0.001, def: 0.22, hint: 'Afterglow. Phosphors keep emitting after the beam has gone, smearing motion.' },
-      { key: 'phosphor.persistenceTilt', type: 'float', label: 'Persistence tilt', min: -1, max: 1, step: 0.001, def: 0.45, hint: 'P22 green outlasts red and blue, so trails go green. Negative pushes them blue.' },
-      { key: 'phosphor.gamut', type: 'float', label: 'P22 gamut', min: 0, max: 1, step: 0.001, def: 0.4, hint: 'Bend the primaries toward real P22 phosphor: dirty green, orange-red, violet-blue.' },
-    ],
-  },
-  {
-    id: 'glow',
-    label: 'Halation & Bloom',
-    kind: 'video',
-    enableKey: 'glow.enabled',
-    hint: 'Light leaving a phosphor is scattered inside the glass and reflected back off its front face.',
-    params: [
-      { key: 'glow.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
-      { key: 'glow.threshold', type: 'float', label: 'Bloom threshold', min: 0, max: 1, step: 0.001, def: 0.72, hint: 'Signal level at which the glass starts to scatter visibly. Set it low and a flat mid-grey field glows, which no tube does.' },
-      { key: 'glow.bloom', type: 'float', label: 'Bloom', min: 0, max: 2, step: 0.001, def: 0.45, hint: 'Tight glow immediately around bright areas.' },
-      { key: 'glow.bloomRadius', type: 'float', label: 'Bloom radius', min: 0.2, max: 4, step: 0.01, def: 1.0 },
-      { key: 'glow.halation', type: 'float', label: 'Halation', min: 0, max: 2, step: 0.001, def: 0.35, hint: 'The wide, warm haze around bright objects, caused by internal reflection in the faceplate.' },
-      { key: 'glow.halationRadius', type: 'float', label: 'Halation radius', min: 1, max: 12, step: 0.01, def: 5.0 },
-      { key: 'glow.halationTint', type: 'float', label: 'Halation warmth', min: 0, max: 1, step: 0.001, def: 0.6, hint: 'Red scatters furthest through glass, so the haze skews orange.' },
-      { key: 'glow.diffusion', type: 'float', label: 'Glass diffusion', min: 0, max: 1, step: 0.001, def: 0.15, hint: 'A flat veil over the whole screen. Old glass is not clear glass.' },
-      { key: 'glow.vignette', type: 'float', label: 'Vignette', min: 0, max: 1, step: 0.001, def: 0.3, hint: 'Corners are further from the gun and get less beam energy.' },
-      { key: 'glow.glare', type: 'float', label: 'Room glare', min: 0, max: 1, step: 0.001, def: 0.08, hint: 'A window reflected in the glass. Lifts the blacks unevenly.' },
-    ],
-  },
-  {
-    id: 'convergence',
-    label: 'Convergence & Focus',
-    kind: 'video',
-    enableKey: 'convergence.enabled',
-    hint: 'Three separate electron guns have to hit the same dot from three different angles. They never quite did.',
-    params: [
-      { key: 'convergence.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
-      { key: 'convergence.redX', type: 'float', label: 'Red offset X', min: -4, max: 4, step: 0.01, def: -0.45, unit: 'px' },
-      { key: 'convergence.redY', type: 'float', label: 'Red offset Y', min: -4, max: 4, step: 0.01, def: 0.1, unit: 'px' },
-      { key: 'convergence.blueX', type: 'float', label: 'Blue offset X', min: -4, max: 4, step: 0.01, def: 0.5, unit: 'px' },
-      { key: 'convergence.blueY', type: 'float', label: 'Blue offset Y', min: -4, max: 4, step: 0.01, def: -0.15, unit: 'px' },
-      { key: 'convergence.radial', type: 'float', label: 'Radial error', min: 0, max: 2, step: 0.001, def: 0.7, hint: 'Convergence is set up in the centre, so the error grows towards the corners.' },
-      { key: 'convergence.focus', type: 'float', label: 'Defocus', min: 0, max: 1, step: 0.001, def: 0.12, hint: 'Spot size in the middle of the screen.' },
-      { key: 'convergence.edgeFocus', type: 'float', label: 'Edge defocus', min: 0, max: 1, step: 0.001, def: 0.4, hint: 'The beam travels further to reach a corner, so it lands as a bigger, softer blob.' },
-    ],
-  },
-  {
-    id: 'tube',
-    label: 'Tube Response',
-    kind: 'video',
-    enableKey: 'tube.enabled',
-    hint: 'The non-linear behaviour of the gun, the power supply and the automatic gain control.',
-    params: [
-      { key: 'tube.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
-      { key: 'tube.gamma', type: 'float', label: 'CRT gamma', min: 1.6, max: 3.2, step: 0.01, def: 2.45, hint: 'Beam current versus grid voltage. ~2.4 is the number the whole video standard was built around.' },
-      { key: 'tube.blackCrush', type: 'float', label: 'Black crush', min: 0, max: 1, step: 0.001, def: 0.15, hint: 'Below cut-off the gun simply stops. Shadow detail disappears.' },
-      { key: 'tube.whiteClip', type: 'float', label: 'White clip', min: 0.6, max: 1.4, step: 0.001, def: 1.06, hint: 'Highlights slam into the limit and stop getting brighter — they only get fatter.' },
-      { key: 'tube.humBar', type: 'float', label: 'Hum bar', min: 0, max: 1, step: 0.001, def: 0.12, hint: 'Mains ripple on the video rail: a soft bright band drifting slowly up the screen.' },
-      { key: 'tube.humBarSpeed', type: 'float', label: 'Hum bar drift', min: -3, max: 3, step: 0.001, def: 0.45, unit: 'Hz', hint: 'The beat between mains frequency and frame rate. Rarely exactly zero.' },
-      { key: 'tube.humBarWidth', type: 'float', label: 'Hum bar width', min: 0.05, max: 1, step: 0.001, def: 0.35 },
-      { key: 'tube.agcPump', type: 'float', label: 'AGC pumping', min: 0, max: 1, step: 0.001, def: 0.15, hint: 'Automatic gain control chasing the average picture level, a beat behind.' },
-      { key: 'tube.psuSag', type: 'float', label: 'PSU sag', min: 0, max: 1, step: 0.001, def: 0.2, hint: 'A bright picture pulls the high-tension rail down, so large white areas dim and swell.' },
-      { key: 'tube.flicker', type: 'float', label: 'Flicker', min: 0, max: 1, step: 0.001, def: 0.05 },
-    ],
-  },
-  {
-    id: 'faults',
-    label: 'Faults & Wear',
-    kind: 'video',
-    enableKey: 'faults.enabled',
-    hint: 'A set that has been in a corner of a room since 1987.',
-    params: [
-      { key: 'faults.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
-      { key: 'faults.burnIn', type: 'float', label: 'Burn-in', min: 0, max: 1, step: 0.001, def: 0.0, hint: 'Phosphor permanently dimmed by a static image. Builds up over the clip.' },
-      { key: 'faults.burnInRate', type: 'float', label: 'Burn-in rate', min: 0.001, max: 0.2, step: 0.001, def: 0.02, log: true, advanced: true },
-      { key: 'faults.dirt', type: 'float', label: 'Dust & smears', min: 0, max: 1, step: 0.001, def: 0.12, hint: 'Static charge on the faceplate pulls in dust. Nobody ever cleaned the corners.' },
-      { key: 'faults.moire', type: 'float', label: 'Moiré', min: 0, max: 1, step: 0.001, def: 0.08, hint: 'Interference between the mask pitch and fine picture detail.' },
-      { key: 'faults.degauss', type: 'float', label: 'Degauss strength', min: 0, max: 1, step: 0.001, def: 0.6, noRandom: true, hint: 'Strength of the colour-warping ripple fired by the Degauss button.' },
-      { key: 'faults.powerState', type: 'enum', label: 'Power state', options: POWER_STATES, def: 'on', noRandom: true },
-      { key: 'faults.warmup', type: 'float', label: 'Warm-up time', min: 0.2, max: 8, step: 0.01, def: 2.2, unit: 's', noRandom: true },
-    ],
-  },
-  {
-    id: 'glitch',
-    label: 'Glitching',
-    kind: 'video',
-    enableKey: 'glitch.enabled',
-    hint: 'Discrete failures rather than continuous wear. Everything here fires in bursts driven by Event rate, so it punctuates a shot instead of sitting on it — which is what makes a cut land.',
-    params: [
-      { key: 'glitch.enabled', type: 'bool', label: 'Enabled', def: false, noRandom: true },
-      { key: 'glitch.rate', type: 'float', label: 'Event rate', min: 0, max: 1, step: 0.001, def: 0.25, hint: 'How often anything below fires. At 0 the section is silent however high the individual amounts are.' },
-      { key: 'glitch.dropout', type: 'float', label: 'Tape dropout', min: 0, max: 1, step: 0.001, def: 0.25, hint: 'The head loses contact with the oxide and the line goes to white or black. The single most recognisable VHS failure.' },
-      { key: 'glitch.dropoutLength', type: 'float', label: 'Dropout length', min: 0.01, max: 1, step: 0.001, def: 0.18, advanced: true, hint: 'How far across the line a dropout runs.' },
-      { key: 'glitch.lineRepeat', type: 'float', label: 'Line repeat', min: 0, max: 1, step: 0.001, def: 0.15, hint: 'The timebase corrector loses a line and holds the previous one, smearing it downward in bands.' },
-      { key: 'glitch.syncSlip', type: 'float', label: 'Sync slip', min: 0, max: 1, step: 0.001, def: 0.2, hint: 'A band of the picture tears sideways as horizontal sync is briefly lost.' },
-      { key: 'glitch.chromaBurst', type: 'float', label: 'Chroma burst', min: 0, max: 1, step: 0.001, def: 0.2, hint: 'Colour detaches from luma and slides off in a violent band.' },
-      { key: 'glitch.blockCorrupt', type: 'float', label: 'Block corruption', min: 0, max: 1, step: 0.001, def: 0, hint: 'Digital, not analogue: macroblocks fetch from the wrong place. For the moment in a tape where a digital transfer fails.' },
-      { key: 'glitch.blockSize', type: 'float', label: 'Block size', min: 2, max: 64, step: 0.5, def: 16, unit: 'px', advanced: true },
-      { key: 'glitch.blockColour', type: 'float', label: 'Block colour error', min: 0, max: 1, step: 0.001, def: 0.5, advanced: true, hint: 'Corrupted blocks also take the wrong chroma, which is what makes digital breakup read as digital.' },
-      { key: 'glitch.posterize', type: 'float', label: 'Bit crush', min: 0, max: 1, step: 0.001, def: 0, hint: 'Collapses the luma to a few levels in bursts. Banding as a rhythmic event.' },
-      { key: 'glitch.invert', type: 'float', label: 'Polarity flip', min: 0, max: 1, step: 0.001, def: 0, hint: 'Bands of inverted video. A single frame of it is deeply unpleasant, which is the point.' },
-    ],
-  },
-  {
-    id: 'output',
-    label: 'Output',
-    kind: 'video',
-    hint: 'Where the tube stops and the room begins.',
-    params: [
-      { key: 'output.bezel', type: 'float', label: 'Bezel', min: 0, max: 1, step: 0.001, def: 0.5, noRandom: true, hint: 'Draw the plastic surround and the dark edge of the glass.' },
-      { key: 'output.bezelShadow', type: 'float', label: 'Bezel shadow', min: 0, max: 1, step: 0.001, def: 0.5, advanced: true, noRandom: true },
-      { key: 'output.roomLight', type: 'float', label: 'Ambient light', min: 0, max: 0.3, step: 0.001, def: 0.02, hint: 'The screen is never truly black in a lit room.' },
-      { key: 'output.dither', type: 'float', label: 'Dither', min: 0, max: 1, step: 0.001, def: 0.25, advanced: true, hint: 'Breaks up banding in the dark parts of the gradient. Leave it on.' },
-      { key: 'output.exposure', type: 'float', label: 'Exposure', min: 0.2, max: 3, step: 0.001, def: 1.0, noRandom: true },
+      { key: 'engine.stock', type: 'bool', label: 'Stock engine', def: true, noRandom: true, hint: 'The emulsion: curve, grain, halation, dyes, print and fading.' },
+      { key: 'engine.lens', type: 'bool', label: 'Lens engine', def: true, noRandom: true, hint: 'Exposure and the lens: softness, vignetting, chromatic aberration, flare.' },
+      { key: 'engine.gate', type: 'bool', label: 'Gate engine', def: true, noRandom: true, hint: 'The machinery: camera and projector transport, dirt, scratches, splices, leaks, decay and telecine.' },
     ],
   },
 ];
 
 /* ------------------------------------------------------------------ *
- * Audio groups
+ * Stock — the emulsion
+ * ------------------------------------------------------------------ */
+
+const STOCK_GROUPS: Group[] = [
+  {
+    id: 'format',
+    label: 'Format & Stock',
+    kind: 'stock',
+    hint: 'The gauge and the emulsion. Every other section scales from these two choices.',
+    params: [
+      { key: 'format.gauge', type: 'enum', label: 'Gauge', options: GAUGE_OPTIONS, def: 'super8', noRandom: true, hint: 'The width of the film and the size of its frame. Drives grain, halation, weave, lens sharpness, roll length and frame rate.' },
+      { key: 'format.stock', type: 'enum', label: 'Stock', options: STOCK_OPTIONS, def: 'kodachrome40', noRandom: true, hint: 'The emulsion. Negative or reversal, its curve, its grain and its dyes.' },
+      { key: 'format.fps', type: 'enum', label: 'Camera speed', options: CAMERA_SPEEDS, def: 'native', noRandom: true, hint: 'Frames per second the camera ran at. The picture only changes this often.' },
+    ],
+  },
+  {
+    id: 'curve',
+    label: 'Characteristic Curve',
+    kind: 'stock',
+    enableKey: 'curve.enabled',
+    hint: 'Density against log exposure: the toe, the straight line and the shoulder. Not grain — this is why film looks like film.',
+    params: [
+      { key: 'curve.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
+      { key: 'curve.gamma', type: 'float', label: 'Contrast (gamma)', min: 0.5, max: 2, step: 0.001, def: 1, log: true, unit: '×', hint: 'Slope of the straight line, as a multiple of the stock’s own.' },
+      { key: 'curve.toe', type: 'float', label: 'Toe position', min: -1, max: 1, step: 0.001, def: 0, unit: 'log E', hint: 'Where the shadows start to compress. Positive crushes more of them into black.' },
+      { key: 'curve.toeSoftness', type: 'float', label: 'Toe softness', min: 0.25, max: 4, step: 0.001, def: 1, log: true, unit: '×', hint: 'How gradually shadows bend into the toe.' },
+      { key: 'curve.shoulder', type: 'float', label: 'Shoulder position', min: -1.5, max: 1.5, step: 0.001, def: 0, unit: 'log E', hint: 'Where the highlights start to roll off. Negative brings the shoulder down into the picture.' },
+      { key: 'curve.shoulderSoftness', type: 'float', label: 'Shoulder softness', min: 0.25, max: 4, step: 0.001, def: 1, log: true, unit: '×', hint: 'How gently the highlights bend over.' },
+      { key: 'curve.crossover', type: 'float', label: 'Layer crossover', min: -1, max: 1, step: 0.001, def: 0, advanced: true, hint: 'Spreads the three layers’ contrast apart, so shadows and highlights take opposite casts.' },
+      { key: 'curve.push', type: 'float', label: 'Push / pull', min: -2, max: 3, step: 0.01, def: 0, unit: 'stops', hint: 'Rated faster and developed longer. More contrast, more grain, more fog, thinner shadows.' },
+    ],
+  },
+  {
+    id: 'grain',
+    label: 'Grain',
+    kind: 'stock',
+    enableKey: 'grain.enabled',
+    hint: 'Silver and dye clouds in three uncorrelated layers, fixed to the film and scaled by the format.',
+    params: [
+      { key: 'grain.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
+      { key: 'grain.amount', type: 'float', label: 'Amount', min: 0, max: 3, step: 0.001, def: 1, unit: '×', hint: 'Multiple of the stock’s published RMS granularity.' },
+      { key: 'grain.size', type: 'float', label: 'Clump size', min: 0.5, max: 3, step: 0.001, def: 1, log: true, unit: '×', hint: 'Multiple of the stock’s own clump size.' },
+      { key: 'grain.colour', type: 'float', label: 'Layer independence', min: 0, max: 1, step: 0.001, def: 1, hint: 'At 1 each layer has its own grain, as in real film, and it reads as coloured. At 0 they share one pattern.' },
+      { key: 'grain.blue', type: 'float', label: 'Blue layer', min: 0.5, max: 2, step: 0.001, def: 1, unit: '×', advanced: true, hint: 'The blue-sensitive layer is usually the grainiest. This scales it on top of the stock’s own balance.' },
+      { key: 'grain.roughness', type: 'float', label: 'Clumping', min: 0, max: 1, step: 0.001, def: 0.5, hint: 'Weight of the coarser octave — how much grains gather into clusters.' },
+      { key: 'grain.density', type: 'float', label: 'Density response', min: 0, max: 1, step: 0.001, def: 0.5, advanced: true, hint: 'How grain power follows density. 0.5 is the square-root law silver obeys.' },
+      { key: 'grain.print', type: 'float', label: 'Print grain', min: 0, max: 3, step: 0.001, def: 1, unit: '×', advanced: true, hint: 'The print stock’s own, much finer grain, and that of any duplicate generations.' },
+    ],
+  },
+  {
+    id: 'halation',
+    label: 'Halation',
+    kind: 'stock',
+    enableKey: 'halation.enabled',
+    hint: 'Light through the emulsion, off the back of the base, and back in from behind. The red ring round every light.',
+    params: [
+      { key: 'halation.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
+      { key: 'halation.amount', type: 'float', label: 'Amount', min: 0, max: 5, step: 0.001, def: 1, unit: '×', hint: 'Multiple of how much light the stock’s anti-halation backing lets back.' },
+      { key: 'halation.radius', type: 'float', label: 'Radius', min: 0.25, max: 4, step: 0.001, def: 1, log: true, unit: '×', hint: 'Multiple of the distance set by the base thickness.' },
+      { key: 'halation.green', type: 'float', label: 'Green reach', min: 0, max: 1, step: 0.001, def: 0.25, hint: 'How much of the returning light reaches the green layer as well as the red. More is orange, less is red.' },
+      { key: 'halation.noBacking', type: 'bool', label: 'Backing removed', def: false, hint: 'The anti-halation layer stripped off before processing — the trick that makes CineStill glow.' },
+    ],
+  },
+  {
+    id: 'dye',
+    label: 'Dyes',
+    kind: 'stock',
+    enableKey: 'dye.enabled',
+    hint: 'What the three dye layers do to one another, and how far the dyes are from pure.',
+    params: [
+      { key: 'dye.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
+      { key: 'dye.saturation', type: 'float', label: 'Interimage', min: 0, max: 2, step: 0.001, def: 1, unit: '×', hint: 'Layers inhibiting each other’s development, which is where film’s colour separation comes from.' },
+      { key: 'dye.impurity', type: 'float', label: 'Dye impurity', min: 0, max: 2.5, step: 0.001, def: 1, unit: '×', hint: 'Unwanted absorptions. More muddies the colour, less makes it unreally pure.' },
+    ],
+  },
+  {
+    id: 'print',
+    label: 'Print & Process',
+    kind: 'stock',
+    enableKey: 'print.enabled',
+    hint: 'What a laboratory did with the negative: printed it, or, today, scanned it. Reversal is projected as it came out of the tank.',
+    params: [
+      { key: 'print.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
+      { key: 'print.process', type: 'enum', label: 'Process', options: PROCESSES, def: 'print', noRandom: true, hint: 'How a negative becomes a picture. Ignored for reversal stocks.' },
+      { key: 'print.stock', type: 'enum', label: 'Print stock', options: PRINT_OPTIONS, def: 'vision2383', noRandom: true, hint: 'The positive the negative is printed onto.' },
+      { key: 'print.red', type: 'float', label: 'Red printer light', min: 1, max: 50, step: 0.1, def: 25, unit: 'pts', hint: 'Printer points; 25 is the laboratory’s nominal. More red light makes the print more cyan.' },
+      { key: 'print.green', type: 'float', label: 'Green printer light', min: 1, max: 50, step: 0.1, def: 25, unit: 'pts', hint: 'More green light makes the print more magenta.' },
+      { key: 'print.blue', type: 'float', label: 'Blue printer light', min: 1, max: 50, step: 0.1, def: 25, unit: 'pts', hint: 'More blue light makes the print more yellow.' },
+      { key: 'print.density', type: 'float', label: 'Print density', min: -12, max: 12, step: 0.1, def: 0, unit: 'pts', hint: 'All three lights at once: a darker or lighter print.' },
+      { key: 'print.generations', type: 'int', label: 'Duplicate generations', min: 0, max: 4, def: 0, hint: 'Interpositive-to-internegative copies before the print. Each adds grain, contrast and softness.' },
+      { key: 'print.bleachBypass', type: 'float', label: 'Bleach bypass', min: 0, max: 1, step: 0.001, def: 0, hint: 'Silver left in the print alongside the dye. Contrastier, desaturated, harsher.' },
+    ],
+  },
+  {
+    id: 'fade',
+    label: 'Dye Fading',
+    kind: 'stock',
+    enableKey: 'fade.enabled',
+    hint: 'Each dye decays at its own rate. Not a desaturation — a specific, recognisable shift.',
+    params: [
+      { key: 'fade.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
+      { key: 'fade.years', type: 'float', label: 'Age', min: 0, max: 80, step: 0.1, def: 0, unit: 'years', hint: 'How long the positive has existed. Rates come from the stock.' },
+      { key: 'fade.storage', type: 'enum', label: 'Storage', options: STORAGE, def: 'room', hint: 'Dye fading roughly doubles with every 5–7 °C. Where it was kept matters more than how long.' },
+      { key: 'fade.cyan', type: 'float', label: 'Cyan rate', min: 0, max: 3, step: 0.001, def: 1, unit: '×', advanced: true, hint: 'Multiple of the stock’s cyan fade rate.' },
+      { key: 'fade.magenta', type: 'float', label: 'Magenta rate', min: 0, max: 3, step: 0.001, def: 1, unit: '×', advanced: true, hint: 'Multiple of the stock’s magenta fade rate.' },
+      { key: 'fade.yellow', type: 'float', label: 'Yellow rate', min: 0, max: 3, step: 0.001, def: 1, unit: '×', advanced: true, hint: 'Multiple of the stock’s yellow fade rate.' },
+      { key: 'fade.stain', type: 'float', label: 'Yellow stain', min: 0, max: 3, step: 0.001, def: 1, unit: '×', advanced: true, hint: 'Multiple of the stock’s rate of base and coupler yellowing.' },
+    ],
+  },
+];
+
+/* ------------------------------------------------------------------ *
+ * Lens — the light before it reaches the film
+ * ------------------------------------------------------------------ */
+
+const LENS_GROUPS: Group[] = [
+  {
+    id: 'exposure',
+    label: 'Exposure',
+    kind: 'lens',
+    enableKey: 'exposure.enabled',
+    hint: 'How much light, of what colour, reached the film.',
+    params: [
+      { key: 'exposure.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
+      { key: 'exposure.stops', type: 'float', label: 'Exposure', min: -4, max: 4, step: 0.01, def: 0, unit: 'stops', hint: 'Relative to what the meter asked for.' },
+      { key: 'exposure.headroom', type: 'float', label: 'Source headroom', min: 0, max: 4, step: 0.01, def: 2, unit: 'stops', noRandom: true, hint: 'How far above white the source’s brightest highlights are taken to have been in the scene.' },
+      { key: 'exposure.light', type: 'enum', label: 'Scene light', options: LIGHTS, def: 'matched', hint: 'What the footage was lit with, against what the stock is balanced for.' },
+      { key: 'exposure.filter85', type: 'bool', label: '85 filter', def: false, hint: 'The orange conversion filter. Super 8 cameras had one built in, on a switch.' },
+    ],
+  },
+  {
+    id: 'lens',
+    label: 'Lens',
+    kind: 'lens',
+    enableKey: 'lens.enabled',
+    hint: 'Sharpness in line pairs per millimetre of film, so a small format loses more of the picture to the same glass.',
+    params: [
+      { key: 'lens.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
+      { key: 'lens.resolution', type: 'float', label: 'Resolving power', min: 10, max: 160, step: 0.1, def: 60, log: true, unit: 'lp/mm', hint: 'Spatial frequency at 50% contrast, on the film.' },
+      { key: 'lens.corners', type: 'float', label: 'Corner softness', min: 0, max: 4, step: 0.001, def: 1, hint: 'How much worse the corners are than the centre.' },
+      { key: 'lens.defocus', type: 'float', label: 'Defocus', min: 0, max: 60, step: 0.1, def: 0, unit: 'µm', hint: 'A focus miss, as the radius of the blur on the film.' },
+      { key: 'lens.vignette', type: 'float', label: 'Vignetting', min: 0, max: 3, step: 0.001, def: 0.4, unit: 'stops', hint: 'Light lost in the corners.' },
+      { key: 'lens.chromatic', type: 'float', label: 'Chromatic aberration', min: 0, max: 40, step: 0.1, def: 3, unit: 'µm', hint: 'Lateral colour fringing at the corner of the frame, measured on the film.' },
+      { key: 'lens.distortion', type: 'float', label: 'Distortion', min: -0.2, max: 0.2, step: 0.001, def: 0, hint: 'Barrel (positive) or pincushion (negative).' },
+      { key: 'lens.flare', type: 'float', label: 'Veiling flare', min: 0, max: 0.25, step: 0.001, def: 0.015, hint: 'Light scattered around inside the lens, lifting the shadows.' },
+      { key: 'lens.flareTint', type: 'float', label: 'Flare tint', min: -1, max: 1, step: 0.001, def: 0.2, advanced: true, hint: 'Warm (positive) or cool (negative) flare — the colour of the coatings.' },
+    ],
+  },
+  {
+    id: 'anamorphic',
+    label: 'Anamorphic',
+    kind: 'lens',
+    enableKey: 'anamorphic.enabled',
+    collapsed: true,
+    hint: 'A cylindrical lens squeezing a wide picture onto ordinary film, and everything that drags along with it.',
+    params: [
+      { key: 'anamorphic.enabled', type: 'bool', label: 'Enabled', def: false, noRandom: true },
+      { key: 'anamorphic.squeeze', type: 'float', label: 'Squeeze', min: 1, max: 2, step: 0.01, def: 2, unit: '×', hint: 'Horizontal compression on the film. 2× is CinemaScope.' },
+      { key: 'anamorphic.streak', type: 'float', label: 'Streak flare', min: 0, max: 3, step: 0.001, def: 0.6, hint: 'The horizontal line through every bright source.' },
+      { key: 'anamorphic.streakLength', type: 'float', label: 'Streak length', min: 0.05, max: 1, step: 0.001, def: 0.45, hint: 'As a fraction of the frame width.' },
+      { key: 'anamorphic.streakTint', type: 'float', label: 'Streak tint', min: 0, max: 1, step: 0.001, def: 0.75, hint: 'From neutral to the familiar electric blue.' },
+      { key: 'anamorphic.threshold', type: 'float', label: 'Streak threshold', min: 0, max: 5, step: 0.01, def: 2.5, unit: 'stops', advanced: true, hint: 'Stops over grey before a highlight starts to streak.' },
+    ],
+  },
+];
+
+/* ------------------------------------------------------------------ *
+ * Gate — the machinery the film went through
+ * ------------------------------------------------------------------ */
+
+const GATE_GROUPS: Group[] = [
+  {
+    id: 'camera',
+    label: 'Camera Transport',
+    kind: 'gate',
+    enableKey: 'camera.enabled',
+    hint: 'The camera pulling film down a frame at a time, imperfectly. Faults here are recorded into the picture, under the grain.',
+    params: [
+      { key: 'camera.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
+      { key: 'camera.weave', type: 'float', label: 'Registration error', min: 0, max: 80, step: 0.1, def: 6, unit: 'µm', hint: 'How far each frame lands from where it should, on the film. The image moves; the grain does not.' },
+      { key: 'camera.weaveSpeed', type: 'float', label: 'Weave speed', min: 0.1, max: 4, step: 0.001, def: 1, log: true, unit: 'Hz', hint: 'How fast the slow wander of the frame moves.' },
+      { key: 'camera.jitter', type: 'float', label: 'Frame jitter', min: 0, max: 1, step: 0.001, def: 0.35, hint: 'Share of the error that changes every frame rather than drifting.' },
+      { key: 'camera.flicker', type: 'float', label: 'Exposure flicker', min: 0, max: 0.6, step: 0.001, def: 0.04, unit: 'stops', hint: 'Frame-to-frame exposure variation from a shutter that does not quite repeat.' },
+      { key: 'camera.speedDrift', type: 'float', label: 'Speed drift', min: 0, max: 0.25, step: 0.001, def: 0, hint: 'A spring motor winding down: frames come slower, so they are longer exposures and motion speeds up on projection.' },
+      { key: 'camera.flashRate', type: 'float', label: 'Camera starts', min: 0, max: 20, step: 0.01, def: 0, unit: '/min', hint: 'How often the camera was started. Each start overexposes the first frames while the motor comes up to speed.' },
+      { key: 'camera.flashFrames', type: 'int', label: 'Flash frames', min: 1, max: 6, def: 2, hint: 'How many frames each start burns.' },
+    ],
+  },
+  {
+    id: 'projector',
+    label: 'Projector',
+    kind: 'gate',
+    enableKey: 'projector.enabled',
+    hint: 'The machine showing the film, or the one transferring it. Its faults move the grain with the picture.',
+    params: [
+      { key: 'projector.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
+      { key: 'projector.weave', type: 'float', label: 'Gate weave', min: 0, max: 80, step: 0.1, def: 4, unit: 'µm', hint: 'The whole strip wandering in the gate. Picture, grain and dirt move together.' },
+      { key: 'projector.rotation', type: 'float', label: 'Rotational weave', min: 0, max: 1, step: 0.001, def: 0.2, hint: 'Share of the weave that is a tilt rather than a slide.' },
+      { key: 'projector.speed', type: 'enum', label: 'Projection speed', options: PROJECTOR_SPEEDS, def: 'match', hint: 'Silent film at 16 fps run at sound speed comes out half as fast again.' },
+      { key: 'projector.blades', type: 'enum', label: 'Shutter', options: BLADES, def: '0', hint: 'The shutter interrupting the light while the film moves. Filmed off the screen, it beats against the camera.' },
+      { key: 'projector.captureShutter', type: 'float', label: 'Capture shutter', min: 0.05, max: 1, step: 0.001, def: 0.5, hint: 'Exposure of the camera filming the screen, as a fraction of its frame. Short exposures flicker hardest.' },
+      { key: 'projector.mains', type: 'enum', label: 'Mains', options: MAINS, def: '60', noRandom: true, hint: 'Frequency of the supply — lamp ripple and hum are at twice this.' },
+      { key: 'projector.lampRipple', type: 'float', label: 'Lamp ripple', min: 0, max: 0.2, step: 0.001, def: 0, hint: 'Brightness ripple at twice the mains frequency from an AC lamp.' },
+      { key: 'projector.hotspot', type: 'float', label: 'Hot spot', min: 0, max: 2, step: 0.001, def: 0.25, unit: 'stops', hint: 'Light falling off from the centre of the screen.' },
+      { key: 'projector.warmth', type: 'float', label: 'Lamp colour', min: -1, max: 1, step: 0.001, def: 0, hint: 'Tungsten (warm, positive) against xenon (cool, negative).' },
+      { key: 'projector.focus', type: 'float', label: 'Focus', min: 0, max: 60, step: 0.1, def: 0, unit: 'µm', hint: 'A projection lens out of focus. Unlike the camera lens, this softens the grain too.' },
+      { key: 'projector.buckle', type: 'float', label: 'Film buckle', min: 0, max: 60, step: 0.1, def: 0, unit: 'µm', hint: 'The frame bowing towards the lamp as it heats, so focus breathes and the centre goes soft.' },
+      { key: 'projector.framing', type: 'float', label: 'Framing', min: -0.5, max: 0.5, step: 0.001, def: 0, unit: 'frames', hint: 'The framing knob out of adjustment, showing the frame line.' },
+    ],
+  },
+  {
+    id: 'gatedirt',
+    label: 'Gate Dirt & Hair',
+    kind: 'gate',
+    enableKey: 'gatedirt.enabled',
+    hint: 'Grit stuck in the gate itself. It stays put while the film runs past, for seconds at a time.',
+    params: [
+      { key: 'gatedirt.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
+      { key: 'gatedirt.hair', type: 'float', label: 'Hairs', min: 0, max: 1, step: 0.001, def: 0, hint: 'How often a hair is caught at the edge of the aperture.' },
+      { key: 'gatedirt.specks', type: 'float', label: 'Specks', min: 0, max: 1, step: 0.001, def: 0, hint: 'Grit lodged in the gate — still while the picture moves under it.' },
+      { key: 'gatedirt.life', type: 'float', label: 'Lifetime', min: 0.5, max: 30, step: 0.1, def: 6, log: true, unit: 's', hint: 'How long before a hair or a speck is dislodged.' },
+      { key: 'gatedirt.wiggle', type: 'float', label: 'Hair wiggle', min: 0, max: 1, step: 0.001, def: 0.5, hint: 'How much a hair flutters as each frame is pulled past it.' },
+      { key: 'gatedirt.size', type: 'float', label: 'Size', min: 0.3, max: 3, step: 0.001, def: 1, log: true, unit: '×', hint: 'Scales hairs and specks.' },
+    ],
+  },
+  {
+    id: 'filmdirt',
+    label: 'Film Dirt',
+    kind: 'gate',
+    enableKey: 'filmdirt.enabled',
+    hint: 'Dust and lint on the film itself. A different frame carries different dirt, so it lasts one frame and is gone.',
+    params: [
+      { key: 'filmdirt.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
+      { key: 'filmdirt.dust', type: 'float', label: 'Dust', min: 0, max: 1, step: 0.001, def: 0, hint: 'Specks per frame.' },
+      { key: 'filmdirt.fibres', type: 'float', label: 'Fibres', min: 0, max: 1, step: 0.001, def: 0, hint: 'Lint and short hairs on the film, curled.' },
+      { key: 'filmdirt.size', type: 'float', label: 'Size', min: 0.3, max: 3, step: 0.001, def: 1, log: true, unit: '×', hint: 'Physical size of the dirt — the same speck covers more of a smaller frame.' },
+      { key: 'filmdirt.negative', type: 'float', label: 'On the negative', min: 0, max: 1, step: 0.001, def: 0.4, hint: 'Share of the dirt that was on the negative when it was printed, and so prints white.' },
+    ],
+  },
+  {
+    id: 'scratch',
+    label: 'Scratches',
+    kind: 'gate',
+    enableKey: 'scratch.enabled',
+    hint: 'Grit in a gate drawing a line along the film. It persists across a shot because the grit does.',
+    params: [
+      { key: 'scratch.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
+      { key: 'scratch.rate', type: 'float', label: 'Scratches', min: 0, max: 1, step: 0.001, def: 0, hint: 'How often a scratch is running.' },
+      { key: 'scratch.life', type: 'float', label: 'Duration', min: 0.5, max: 20, step: 0.1, def: 4, log: true, unit: 's', hint: 'How long a piece of grit stays in the gate.' },
+      { key: 'scratch.width', type: 'float', label: 'Width', min: 5, max: 120, step: 0.1, def: 25, log: true, unit: 'µm', hint: 'On the film.' },
+      { key: 'scratch.depth', type: 'float', label: 'Depth', min: 0, max: 1, step: 0.001, def: 0.5, hint: 'How many dye layers an emulsion scratch cuts through. Shallow ones are coloured.' },
+      { key: 'scratch.base', type: 'float', label: 'Base side', min: 0, max: 1, step: 0.001, def: 0.3, hint: 'Share of scratches on the base rather than the emulsion.' },
+      { key: 'scratch.negative', type: 'float', label: 'On the negative', min: 0, max: 1, step: 0.001, def: 0.3, hint: 'Share made on the negative before printing, which reverses their polarity.' },
+      { key: 'scratch.wander', type: 'float', label: 'Wander', min: 0, max: 1, step: 0.001, def: 0.3, hint: 'How far a scratch drifts sideways as the film weaves.' },
+    ],
+  },
+  {
+    id: 'splice',
+    label: 'Splices & Cues',
+    kind: 'gate',
+    enableKey: 'splice.enabled',
+    hint: 'Joins in the film, and the marks a projectionist watched for.',
+    params: [
+      { key: 'splice.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
+      { key: 'splice.rate', type: 'float', label: 'Splices', min: 0, max: 20, step: 0.01, def: 0, unit: '/min', hint: 'How often the film has been joined.' },
+      { key: 'splice.kind', type: 'enum', label: 'Kind', options: SPLICE_KINDS, def: 'tape', hint: 'Tape or cement.' },
+      { key: 'splice.jump', type: 'float', label: 'Jump', min: 0, max: 1, step: 0.001, def: 0.6, hint: 'How far the picture jumps as the splice goes through the gate.' },
+      { key: 'splice.flash', type: 'float', label: 'Flash', min: 0, max: 1, step: 0.001, def: 0.5, hint: 'The light frame at the join.' },
+      { key: 'splice.cueMarks', type: 'bool', label: 'Cue marks', def: false, hint: 'The circles in the top right corner before a reel change.' },
+      { key: 'splice.reel', type: 'float', label: 'Reel length', min: 5, max: 1200, step: 1, def: 60, log: true, unit: 's', hint: 'Where the reel ends, for the cue marks.' },
+    ],
+  },
+  {
+    id: 'leak',
+    label: 'Light Leaks & Fog',
+    kind: 'gate',
+    enableKey: 'leak.enabled',
+    hint: 'Light reaching the film where it should not. It exposes the emulsion, so it goes through the curve like any other light.',
+    params: [
+      { key: 'leak.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
+      { key: 'leak.amount', type: 'float', label: 'Leak', min: 0, max: 3, step: 0.001, def: 0, hint: 'A leak from the side of the camera or cartridge, coming and going.' },
+      { key: 'leak.position', type: 'float', label: 'Leak position', min: 0, max: 1, step: 0.001, def: 0.15, hint: 'Where round the frame the light gets in.' },
+      { key: 'leak.speed', type: 'float', label: 'Leak motion', min: 0, max: 2, step: 0.001, def: 0.5, hint: 'How quickly it flares and fades.' },
+      { key: 'leak.edgeFog', type: 'float', label: 'Edge fog', min: 0, max: 1, step: 0.001, def: 0, hint: 'Light piped along the perforated edge, fogging that side of every frame.' },
+      { key: 'leak.rollFog', type: 'float', label: 'Roll-end fog', min: 0, max: 3, step: 0.001, def: 0, hint: 'The first and last frames of a load, fogged while it was loaded and unloaded.' },
+      { key: 'leak.warmth', type: 'float', label: 'Colour', min: 0, max: 1, step: 0.001, def: 0.75, hint: 'Light through the base reaches the red layer first. 1 is that orange; 0 is white light.' },
+    ],
+  },
+  {
+    id: 'decay',
+    label: 'Decay',
+    kind: 'gate',
+    enableKey: 'decay.enabled',
+    hint: 'Film that has been kept badly. The base shrinks, the emulsion lets go, things grow on it.',
+    params: [
+      { key: 'decay.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
+      { key: 'decay.vinegar', type: 'float', label: 'Vinegar syndrome', min: 0, max: 1, step: 0.001, def: 0, hint: 'Acetate breaking down: the base shrinks and buckles, so the picture warps.' },
+      { key: 'decay.channelling', type: 'float', label: 'Channelling', min: 0, max: 1, step: 0.001, def: 0, hint: 'The emulsion lifting in ridges as the base shrinks beneath it.' },
+      { key: 'decay.mould', type: 'float', label: 'Mould', min: 0, max: 1, step: 0.001, def: 0, hint: 'Fungus eating the gelatin in soft-edged colonies.' },
+      { key: 'decay.water', type: 'float', label: 'Water marks', min: 0, max: 1, step: 0.001, def: 0, hint: 'Tide lines where water dried on the emulsion.' },
+      { key: 'decay.flaking', type: 'float', label: 'Emulsion flaking', min: 0, max: 1, step: 0.001, def: 0, hint: 'Patches where the emulsion has come away entirely.' },
+    ],
+  },
+  {
+    id: 'telecine',
+    label: 'Telecine',
+    kind: 'gate',
+    enableKey: 'telecine.enabled',
+    hint: 'Turning projected film into video: pulldown cadence and the transfer’s tone.',
+    params: [
+      { key: 'telecine.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
+      { key: 'telecine.fields', type: 'bool', label: 'Interlaced pulldown', def: false, hint: 'Build each video frame from two fields that may come from different film frames — the 3:2 cadence.' },
+      { key: 'telecine.fieldOrder', type: 'enum', label: 'Field order', options: FIELD_ORDERS, def: 'upper', advanced: true, hint: 'Which field is first in time.' },
+      { key: 'telecine.grey', type: 'float', label: 'Mid grey', min: 0.05, max: 0.4, step: 0.001, def: 0.18, hint: 'Where the print’s aim density lands on video, as linear light.' },
+      { key: 'telecine.white', type: 'float', label: 'White', min: 0.5, max: 1.5, step: 0.001, def: 1, hint: 'Where clear film lands.' },
+      { key: 'telecine.black', type: 'float', label: 'Black lift', min: 0, max: 0.1, step: 0.0001, def: 0, hint: 'Flare in the transfer, lifting the blacks.' },
+      { key: 'telecine.saturation', type: 'float', label: 'Saturation', min: 0, max: 2, step: 0.001, def: 1, hint: 'The colourist’s saturation knob.' },
+    ],
+  },
+  {
+    id: 'framing',
+    label: 'Framing & Output',
+    kind: 'gate',
+    hint: 'The shape and frame rate of what comes out. Decides the export file, not just the preview.',
+    params: [
+      { key: 'framing.aspect', type: 'enum', label: 'Aspect', options: ASPECTS, def: 'gate', noRandom: true, hint: 'The projected picture’s shape. The export is exactly this shape.' },
+      { key: 'framing.overscan', type: 'float', label: 'Overscan', min: -0.2, max: 0.8, step: 0.001, def: -0.05, noRandom: true, hint: 'Negative crops inside the gate; positive shows the gate edge, the frame lines and the perforations.' },
+      { key: 'framing.fps', type: 'enum', label: 'Output rate', options: OUTPUT_RATES, def: 'film', noRandom: true, hint: 'Frame rate of the video. Anything but the film rate produces a cadence.' },
+      { key: 'framing.dither', type: 'float', label: 'Dither', min: 0, max: 1, step: 0.001, def: 0.5, noRandom: true, advanced: true, hint: 'A little noise before quantising to 8 bits, so smooth gradients do not band.' },
+    ],
+  },
+];
+
+/* ------------------------------------------------------------------ *
+ * Sound
  * ------------------------------------------------------------------ */
 
 const AUDIO_GROUPS: Group[] = [
@@ -570,131 +595,121 @@ const AUDIO_GROUPS: Group[] = [
     label: 'Audio Source',
     kind: 'audio',
     enableKey: 'audio.enabled',
-    hint: 'What arrives at the set, and how many channels survive.',
+    hint: 'What goes onto the soundtrack. Film sound is one channel.',
     params: [
-      { key: 'audio.enabled', type: 'bool', label: 'Process audio', def: true, noRandom: true },
-      { key: 'audio.inputGain', type: 'float', label: 'Input gain', min: -24, max: 24, step: 0.1, def: 0, unit: 'dB', noRandom: true },
-      { key: 'audio.channelMode', type: 'enum', label: 'Channels', options: CHANNEL_MODES, def: 'mono', noRandom: true },
-      { key: 'audio.monoAmount', type: 'float', label: 'Mono collapse', min: 0, max: 1, step: 0.001, def: 1.0, hint: 'Partial collapse is useful: 0.7 keeps a hint of width while killing the modern stereo image.' },
-      { key: 'audio.width', type: 'float', label: 'Residual width', min: 0, max: 2, step: 0.001, def: 0.35, hint: 'How wide whatever stereo survives is allowed to be.' },
-      { key: 'audio.region', type: 'enum', label: 'Region', options: REGIONS, def: 'ntsc', noRandom: true, hint: 'Sets the mains frequency and the line-scan whine pitch together.' },
+      { key: 'audio.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
+      { key: 'audio.inputGain', type: 'float', label: 'Input gain', min: -24, max: 24, step: 0.1, def: 0, unit: 'dB', noRandom: true, hint: 'Level into the recording.' },
+      { key: 'audio.channelMode', type: 'enum', label: 'Channels', options: CHANNEL_MODES, def: 'mono', hint: 'Collapse to the one channel a projector plays.' },
+      { key: 'audio.track', type: 'enum', label: 'Soundtrack', options: TRACK_TYPES, def: 'magnetic', hint: 'How the sound was carried on the film.' },
     ],
   },
   {
     id: 'transport',
-    label: 'Tape Transport',
+    label: 'Sound Transport',
     kind: 'audio',
     enableKey: 'transport.enabled',
-    hint: 'Speed instability in the mechanism that carried the tape past the head.',
+    hint: 'Film past the sound head: the speed is smoothed by a flywheel, never perfectly.',
     params: [
       { key: 'transport.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
-      { key: 'transport.wowRate', type: 'float', label: 'Wow rate', min: 0.1, max: 4, step: 0.01, def: 0.62, unit: 'Hz', hint: 'Once-per-revolution error from an eccentric capstan or a warped reel.' },
-      { key: 'transport.wowDepth', type: 'float', label: 'Wow depth', min: 0, max: 1, step: 0.001, def: 0.18, hint: 'Slow pitch drift. Sustained notes sag and recover.' },
-      { key: 'transport.flutterRate', type: 'float', label: 'Flutter rate', min: 3, max: 30, step: 0.01, def: 9.3, unit: 'Hz', hint: 'Faster wobble from the idler and guides.' },
-      { key: 'transport.flutterDepth', type: 'float', label: 'Flutter depth', min: 0, max: 1, step: 0.001, def: 0.09 },
-      { key: 'transport.drift', type: 'float', label: 'Random drift', min: 0, max: 1, step: 0.001, def: 0.2, hint: 'A slow random walk on top of the periodic errors — stops the wobble sounding like an LFO.' },
-      { key: 'transport.scrape', type: 'float', label: 'Scrape flutter', min: 0, max: 1, step: 0.001, def: 0.12, hint: 'Very fast stick-slip against the heads. Adds a grainy roughness, not a pitch.' },
-      { key: 'transport.dropoutRate', type: 'float', label: 'Dropout rate', min: 0, max: 60, step: 0.1, def: 4, unit: '/min', hint: 'Bad patches of oxide: the level falls out for a moment.' },
-      { key: 'transport.dropoutDepth', type: 'float', label: 'Dropout depth', min: 0, max: 1, step: 0.001, def: 0.7 },
-      { key: 'transport.dropoutLength', type: 'float', label: 'Dropout length', min: 5, max: 400, step: 1, def: 45, unit: 'ms' },
+      { key: 'transport.wowRate', type: 'float', label: 'Wow rate', min: 0.1, max: 4, step: 0.001, def: 0.8, log: true, unit: 'Hz', hint: 'Slow pitch wander — a capstan or flywheel out of round.' },
+      { key: 'transport.wowDepth', type: 'float', label: 'Wow depth', min: 0, max: 1, step: 0.001, def: 0.15, hint: 'Depth of the slow wander.' },
+      { key: 'transport.flutterRate', type: 'float', label: 'Flutter rate', min: 4, max: 40, step: 0.01, def: 11, log: true, unit: 'Hz', hint: 'Fast pitch wobble from rollers and sprockets.' },
+      { key: 'transport.flutterDepth', type: 'float', label: 'Flutter depth', min: 0, max: 1, step: 0.001, def: 0.08, hint: 'Depth of the fast wobble.' },
+      { key: 'transport.sprocket', type: 'float', label: 'Sprocket modulation', min: 0, max: 1, step: 0.001, def: 0, hint: 'The intermittent pull-down leaking through the loop to the sound head, at the perforation rate.' },
+      { key: 'transport.drift', type: 'float', label: 'Speed drift', min: 0, max: 1, step: 0.001, def: 0.1, hint: 'A slow random walk in speed.' },
+    ],
+  },
+  {
+    id: 'magnetic',
+    label: 'Magnetic Stripe',
+    kind: 'audio',
+    enableKey: 'magnetic.enabled',
+    hint: 'A millimetre of oxide along the edge of 8 mm film, moving at a few centimetres a second. Used when the soundtrack is magnetic.',
+    params: [
+      { key: 'magnetic.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
+      { key: 'magnetic.hiss', type: 'float', label: 'Hiss', min: -90, max: -20, step: 0.1, def: -50, unit: 'dB', hint: 'Oxide noise. A narrow stripe is a noisy one.' },
+      { key: 'magnetic.headWear', type: 'float', label: 'Head wear', min: 0, max: 1, step: 0.001, def: 0.3, hint: 'Treble lost to a worn head and poor contact, on top of what the film speed allows.' },
+      { key: 'magnetic.saturation', type: 'float', label: 'Saturation', min: 0, max: 1, step: 0.001, def: 0.3, hint: 'The oxide running out of headroom on loud passages.' },
+      { key: 'magnetic.dropouts', type: 'float', label: 'Dropouts', min: 0, max: 60, step: 0.1, def: 3, unit: '/min', hint: 'Oxide flaked off the stripe.' },
+      { key: 'magnetic.dropoutDepth', type: 'float', label: 'Dropout depth', min: 0, max: 1, step: 0.001, def: 0.6, hint: 'How much signal a dropout takes.' },
+      { key: 'magnetic.printThrough', type: 'float', label: 'Print-through', min: -80, max: -20, step: 0.1, def: -52, unit: 'dB', hint: 'Echo from the adjacent winding of the reel, magnetised by it in storage.' },
+      { key: 'magnetic.printDelay', type: 'float', label: 'Echo spacing', min: 0.3, max: 5, step: 0.01, def: 1.8, log: true, unit: 's', advanced: true, hint: 'One turn of the reel at the projection speed.' },
+      { key: 'magnetic.preEcho', type: 'bool', label: 'Pre-echo', def: true, hint: 'Stored heads-out the echo comes before the sound; tails-out, after.' },
+    ],
+  },
+  {
+    id: 'optical',
+    label: 'Optical Track',
+    kind: 'audio',
+    enableKey: 'optical.enabled',
+    hint: 'Sound photographed beside the picture and read back by a lamp and a photocell. Used when the soundtrack is optical.',
+    params: [
+      { key: 'optical.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
+      { key: 'optical.modulation', type: 'float', label: 'Modulation', min: 0.2, max: 1.6, step: 0.001, def: 0.8, hint: 'Programme level against 100% modulation of the track. Above 1 the track runs out.' },
+      { key: 'optical.imageSpread', type: 'float', label: 'Image spread', min: 0, max: 1, step: 0.001, def: 0.3, hint: 'Light spreading in the track emulsion, softening treble and adding intermodulation.' },
+      { key: 'optical.noise', type: 'float', label: 'Track noise', min: -90, max: -20, step: 0.1, def: -56, unit: 'dB', hint: 'Grain in the track, heard as hiss.' },
+      { key: 'optical.crackle', type: 'float', label: 'Crackle', min: 0, max: 40, step: 0.01, def: 2, unit: '/s', hint: 'Dirt on the track passing the slit.' },
+      { key: 'optical.crackleLevel', type: 'float', label: 'Crackle level', min: -60, max: 0, step: 0.1, def: -24, unit: 'dB', hint: 'Loudness of the biggest pops.' },
+      { key: 'optical.ticks', type: 'float', label: 'Perforation ticks', min: 0, max: 1, step: 0.001, def: 0, hint: 'A damaged frame line clicking once a frame.' },
+      { key: 'optical.exciterHum', type: 'float', label: 'Exciter hum', min: -90, max: -20, step: 0.1, def: -72, unit: 'dB', hint: 'An AC-powered exciter lamp rippling at twice the mains frequency.' },
+    ],
+  },
+  {
+    id: 'playback',
+    label: 'Playback & Amplifier',
+    kind: 'audio',
+    enableKey: 'playback.enabled',
+    hint: 'The equalisation and amplifier between the sound head and the speaker.',
+    params: [
+      { key: 'playback.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
+      { key: 'playback.curve', type: 'enum', label: 'Playback curve', options: PLAYBACK_CURVES, def: 'projector', hint: 'The response the theatre or the projector imposed.' },
+      { key: 'playback.lowCut', type: 'float', label: 'Low cut', min: 20, max: 400, step: 1, def: 80, log: true, unit: 'Hz', hint: 'Where the bass gives out.' },
+      { key: 'playback.highCut', type: 'float', label: 'High cut', min: 1500, max: 20000, step: 1, def: 9000, log: true, unit: 'Hz', hint: 'Where the treble gives out. The magnetic stripe sets its own, lower, ceiling from the film speed.' },
+      { key: 'playback.drive', type: 'float', label: 'Drive', min: 0, max: 1, step: 0.001, def: 0.2, hint: 'How hard the amplifier is pushed.' },
+      { key: 'playback.model', type: 'enum', label: 'Amplifier', options: SATURATION_MODELS, def: 'valve', hint: 'The character of its overload.' },
+      { key: 'playback.hum', type: 'float', label: 'Mains hum', min: -90, max: -20, step: 0.1, def: -70, unit: 'dB', hint: 'The amplifier’s own hum.' },
     ],
   },
   {
     id: 'speaker',
-    label: 'Speaker & Enclosure',
+    label: 'Speaker & Room',
     kind: 'audio',
     enableKey: 'speaker.enabled',
-    hint: 'A 6 cm paper cone stapled into a hollow plastic box, firing sideways or at the floor. This is where "muffled" actually comes from.',
+    hint: 'The loudspeaker and the space it is in — from a projector’s built-in cone on the coffee table to a horn behind the screen.',
     params: [
       { key: 'speaker.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
-      { key: 'speaker.lowCut', type: 'float', label: 'Low cut', min: 20, max: 800, step: 1, def: 180, unit: 'Hz', log: true, hint: 'A tiny cone in an unsealed box simply cannot move enough air below this.' },
-      { key: 'speaker.lowCutSlope', type: 'float', label: 'Low cut slope', min: 6, max: 24, step: 6, def: 12, unit: 'dB/oct', advanced: true },
-      { key: 'speaker.highCut', type: 'float', label: 'High cut', min: 800, max: 16000, step: 10, def: 5200, unit: 'Hz', log: true, hint: 'Paper cone plus the audio IF bandwidth. Broadcast TV sound stopped around 10 kHz at best.' },
-      { key: 'speaker.highCutSlope', type: 'float', label: 'High cut slope', min: 6, max: 24, step: 6, def: 12, unit: 'dB/oct', advanced: true },
-      { key: 'speaker.resonanceFreq', type: 'float', label: 'Box resonance', min: 120, max: 1200, step: 1, def: 420, unit: 'Hz', log: true, hint: 'The honk of the cabinet. This single peak does more for the illusion than either filter.' },
-      { key: 'speaker.resonanceGain', type: 'float', label: 'Box resonance gain', min: 0, max: 18, step: 0.1, def: 7.5, unit: 'dB' },
-      { key: 'speaker.resonanceQ', type: 'float', label: 'Box resonance Q', min: 0.4, max: 10, step: 0.01, def: 2.4 },
-      { key: 'speaker.honkFreq', type: 'float', label: 'Cone honk', min: 800, max: 4000, step: 10, def: 1750, unit: 'Hz', log: true, advanced: true, hint: 'A second, nasal peak where the cone breaks up.' },
-      { key: 'speaker.honkGain', type: 'float', label: 'Cone honk gain', min: -6, max: 12, step: 0.1, def: 4, unit: 'dB', advanced: true },
-      { key: 'speaker.notchFreq', type: 'float', label: 'Cancellation notch', min: 300, max: 6000, step: 10, def: 900, unit: 'Hz', log: true, advanced: true, hint: 'Sound leaving the back of the cone meets the front and cancels.' },
-      { key: 'speaker.notchDepth', type: 'float', label: 'Notch depth', min: 0, max: 24, step: 0.1, def: 5, unit: 'dB', advanced: true },
-      { key: 'speaker.cabinet', type: 'float', label: 'Cabinet IR', min: 0, max: 1, step: 0.001, def: 0.45, hint: 'Convolve with a synthesised small-box impulse response: real modal ringing rather than static EQ.' },
-      { key: 'speaker.cabinetSize', type: 'float', label: 'Cabinet size', min: 0, max: 1, step: 0.001, def: 0.35, hint: '0 is a portable set on a kitchen counter, 1 is a wooden console the size of a sideboard.' },
-      { key: 'speaker.breakup', type: 'float', label: 'Cone breakup', min: 0, max: 1, step: 0.001, def: 0.2, hint: 'Level-dependent buzz. Loud passages tear; quiet ones stay clean.' },
-      { key: 'speaker.offAxis', type: 'float', label: 'Off-axis', min: 0, max: 1, step: 0.001, def: 0.3, hint: 'The speaker is not pointing at you. It never was.' },
-      { key: 'speaker.throughWall', type: 'float', label: 'Through the wall', min: 0, max: 1, step: 0.001, def: 0, hint: 'Macro: heavy low-pass plus room tail. The set is on in another room.' },
-      { key: 'speaker.roomTail', type: 'float', label: 'Room tail', min: 0, max: 1, step: 0.001, def: 0.15, hint: 'Short reflections off the walls of a small, hard room.' },
+      { key: 'speaker.resonanceFreq', type: 'float', label: 'Box resonance', min: 60, max: 600, step: 1, def: 180, log: true, unit: 'Hz', hint: 'The cabinet’s main resonance.' },
+      { key: 'speaker.resonanceGain', type: 'float', label: 'Resonance gain', min: 0, max: 12, step: 0.1, def: 3, unit: 'dB', hint: 'How much it rings.' },
+      { key: 'speaker.honkFreq', type: 'float', label: 'Horn honk', min: 400, max: 4000, step: 1, def: 1400, log: true, unit: 'Hz', hint: 'The midrange peak of a horn or a small cone.' },
+      { key: 'speaker.honkGain', type: 'float', label: 'Honk gain', min: 0, max: 12, step: 0.1, def: 3, unit: 'dB', hint: 'How nasal it is.' },
+      { key: 'speaker.cabinet', type: 'float', label: 'Cabinet', min: 0, max: 1, step: 0.001, def: 0.25, hint: 'How much of the box’s own sound is mixed in.' },
+      { key: 'speaker.cabinetSize', type: 'float', label: 'Cabinet size', min: 0, max: 1, step: 0.001, def: 0.3, hint: 'From a projector’s plastic case to a theatre horn.' },
+      { key: 'speaker.breakup', type: 'float', label: 'Cone breakup', min: 0, max: 1, step: 0.001, def: 0.1, hint: 'A small cone distorting on loud passages.' },
+      { key: 'speaker.room', type: 'float', label: 'Room', min: 0, max: 1, step: 0.001, def: 0.3, hint: 'Reverberation of the room.' },
+      { key: 'speaker.booth', type: 'float', label: 'Through the booth glass', min: 0, max: 1, step: 0.001, def: 0, hint: 'Heard from the projection booth rather than the auditorium.' },
     ],
   },
   {
-    id: 'dynamics',
-    label: 'Broadcast Processing',
+    id: 'projnoise',
+    label: 'Projector Noise',
     kind: 'audio',
-    enableKey: 'dynamics.enabled',
-    hint: 'Stations compressed everything flat to stay loud, and the set compressed it again.',
+    enableKey: 'projnoise.enabled',
+    hint: 'The machine itself, in the room: the claw, the shutter, the motor. Locked to the frame rate because it is the frame rate.',
     params: [
-      { key: 'dynamics.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
-      { key: 'dynamics.amount', type: 'float', label: 'Compression', min: 0, max: 1, step: 0.001, def: 0.5 },
-      { key: 'dynamics.threshold', type: 'float', label: 'Threshold', min: -48, max: 0, step: 0.1, def: -26, unit: 'dB', advanced: true },
-      { key: 'dynamics.ratio', type: 'float', label: 'Ratio', min: 1, max: 20, step: 0.1, def: 8, advanced: true },
-      { key: 'dynamics.attack', type: 'float', label: 'Attack', min: 0.1, max: 50, step: 0.1, def: 2, unit: 'ms', log: true, advanced: true },
-      { key: 'dynamics.release', type: 'float', label: 'Release', min: 20, max: 1200, step: 1, def: 180, unit: 'ms', log: true, hint: 'Short releases pump audibly. Pumping is the sound of broadcast.' },
-      { key: 'dynamics.saturation', type: 'float', label: 'Saturation', min: 0, max: 1, step: 0.001, def: 0.25 },
-      { key: 'dynamics.saturationModel', type: 'enum', label: 'Saturation model', options: SATURATION_MODELS, def: 'tape', noRandom: true },
-      { key: 'dynamics.ceiling', type: 'float', label: 'Limiter ceiling', min: -12, max: 0, step: 0.1, def: -1, unit: 'dB', noRandom: true },
-    ],
-  },
-  {
-    id: 'noise',
-    label: 'Noise Bed',
-    kind: 'audio',
-    enableKey: 'noise.enabled',
-    hint: 'Several quiet layers always beat one loud one. Silence is the giveaway that something is digital.',
-    params: [
-      { key: 'noise.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
-
-      { key: 'noise.humLevel', type: 'float', label: 'Mains hum', min: -90, max: -6, step: 0.1, def: -44, unit: 'dB' },
-      { key: 'noise.humMode', type: 'enum', label: 'Hum character', options: HUM_MODES, def: 'both', noRandom: true },
-      { key: 'noise.humHarmonics', type: 'int', label: 'Hum harmonics', min: 1, max: 16, def: 7, hint: 'More harmonics turns a smooth hum into an angry buzz.' },
-      { key: 'noise.humTilt', type: 'float', label: 'Hum brightness', min: 0, max: 1, step: 0.001, def: 0.35, hint: 'How slowly the harmonics roll off. High values buzz like a bad earth.' },
-      { key: 'noise.humDrift', type: 'float', label: 'Hum drift', min: 0, max: 1, step: 0.001, def: 0.15, hint: 'Mains frequency is never exactly nominal, so the hum breathes.' },
-
-      { key: 'noise.flybackLevel', type: 'float', label: 'Flyback whine', min: -90, max: -12, step: 0.1, def: -52, unit: 'dB', hint: 'The line-output transformer singing at the horizontal scan rate: 15.734 kHz on NTSC, 15.625 kHz on PAL. The single most identifiable sound a CRT makes.' },
-      { key: 'noise.flybackDrift', type: 'float', label: 'Flyback drift', min: 0, max: 1, step: 0.001, def: 0.12 },
-      { key: 'noise.flybackSqueal', type: 'float', label: 'Flyback partials', min: 0, max: 1, step: 0.001, def: 0.3, hint: 'Adds the second and third partials — the difference between a pure tone and a sick set.' },
-      { key: 'noise.flybackAudible', type: 'bool', label: 'Shift whine into range', def: false, noRandom: true, hint: 'Drops the whine an octave to ~7.9 kHz so it survives lossy codecs, small speakers and older ears.' },
-
-      { key: 'noise.hissLevel', type: 'float', label: 'Tape hiss', min: -90, max: -12, step: 0.1, def: -54, unit: 'dB' },
-      { key: 'noise.hissTone', type: 'float', label: 'Hiss tone', min: 200, max: 8000, step: 10, def: 2200, unit: 'Hz', log: true },
-      { key: 'noise.hissBreathing', type: 'float', label: 'Hiss breathing', min: 0, max: 1, step: 0.001, def: 0.3, hint: 'Noise reduction mis-tracking: the hiss swells back up whenever the programme goes quiet.' },
-
-      { key: 'noise.staticLevel', type: 'float', label: 'RF static', min: -90, max: 0, step: 0.1, def: -70, unit: 'dB', hint: 'Broadband roar. Rides the video Signal loss parameter when A/V link is on.' },
-      { key: 'noise.rumble', type: 'float', label: 'Mechanical rumble', min: 0, max: 1, step: 0.001, def: 0.15, hint: 'Motor and mains transformer vibration coupling into the cabinet below 120 Hz.' },
-    ],
-  },
-  {
-    id: 'crackle',
-    label: 'Crackle & Contact Faults',
-    kind: 'audio',
-    enableKey: 'crackle.enabled',
-    hint: 'Impulsive, sparse and random — the opposite of the continuous noise bed, and what actually sells decay.',
-    params: [
-      { key: 'crackle.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
-      { key: 'crackle.rate', type: 'float', label: 'Crackle rate', min: 0, max: 300, step: 0.5, def: 14, unit: '/s', hint: 'Events per second, Poisson-distributed so the spacing never sounds metronomic.' },
-      { key: 'crackle.level', type: 'float', label: 'Crackle level', min: -70, max: 0, step: 0.1, def: -30, unit: 'dB' },
-      { key: 'crackle.tone', type: 'float', label: 'Crackle tone', min: 200, max: 12000, step: 10, def: 2600, unit: 'Hz', log: true, hint: 'Centre of the band each click is filtered into. Low is a thud, high is a tick.' },
-      { key: 'crackle.spread', type: 'float', label: 'Tone spread', min: 0, max: 1, step: 0.001, def: 0.6, hint: 'How much the tone of each individual click is randomised.' },
-      { key: 'crackle.impulsiveness', type: 'float', label: 'Impulsiveness', min: 0, max: 1, step: 0.001, def: 0.6, hint: 'Skews the amplitude distribution: most clicks tiny, occasionally one enormous pop.' },
-      { key: 'crackle.decay', type: 'float', label: 'Click decay', min: 0.2, max: 40, step: 0.1, def: 3.5, unit: 'ms', log: true },
-      { key: 'crackle.burstRate', type: 'float', label: 'Burst rate', min: 0, max: 60, step: 0.1, def: 3, unit: '/min', hint: 'Clusters of crackle — a corroded connector or a dry joint arcing.' },
-      { key: 'crackle.burstDensity', type: 'float', label: 'Burst density', min: 0, max: 1, step: 0.001, def: 0.6 },
-      { key: 'crackle.burstLength', type: 'float', label: 'Burst length', min: 20, max: 2000, step: 10, def: 320, unit: 'ms' },
+      { key: 'projnoise.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
+      { key: 'projnoise.level', type: 'float', label: 'Level', min: -80, max: -6, step: 0.1, def: -32, unit: 'dB', hint: 'Overall loudness of the projector.' },
+      { key: 'projnoise.claw', type: 'float', label: 'Claw', min: 0, max: 1, step: 0.001, def: 0.7, hint: 'The intermittent pull-down striking once a frame.' },
+      { key: 'projnoise.tone', type: 'float', label: 'Mechanism tone', min: 400, max: 6000, step: 1, def: 1800, log: true, unit: 'Hz', hint: 'The pitch of the mechanism’s resonances. Small machines ring higher.' },
+      { key: 'projnoise.wear', type: 'float', label: 'Wear', min: 0, max: 1, step: 0.001, def: 0.3, hint: 'Slack in the mechanism: uneven strikes and a second, rattling impact.' },
+      { key: 'projnoise.shutter', type: 'float', label: 'Shutter & fan', min: 0, max: 1, step: 0.001, def: 0.4, hint: 'Air from the shutter blades and the lamp fan.' },
+      { key: 'projnoise.motor', type: 'float', label: 'Motor', min: 0, max: 1, step: 0.001, def: 0.3, hint: 'The motor’s whine and the drive belt.' },
+      { key: 'projnoise.distance', type: 'float', label: 'Distance', min: 0, max: 1, step: 0.001, def: 0.3, hint: 'From beside you on the coffee table to behind a wall.' },
     ],
   },
 ];
 
 /* ------------------------------------------------------------------ *
- * A/V link — the section that makes picture and sound the same machine
+ * A/V link — the couplings that make picture and sound one machine
  * ------------------------------------------------------------------ */
 
 const LINK_GROUPS: Group[] = [
@@ -703,31 +718,27 @@ const LINK_GROUPS: Group[] = [
     label: 'A/V Link',
     kind: 'link',
     enableKey: 'link.enabled',
-    hint: 'On a real set the picture and the sound share a power supply, a chassis and an aerial. Faults show up in both at once. Nothing else in this app matters as much as this section.',
+    hint: 'The picture and the sound go through the same machine. A fault in it shows in both at once.',
     params: [
       { key: 'link.enabled', type: 'bool', label: 'Enabled', def: true, noRandom: true },
-      { key: 'link.humBarToHum', type: 'float', label: 'Hum bar → hum', min: 0, max: 1, step: 0.001, def: 0.7, hint: 'The bar crossing the screen and the hum in the speaker are the same ripple. Locking them is instantly convincing.' },
-      { key: 'link.lossToStatic', type: 'float', label: 'Signal loss → static', min: 0, max: 1, step: 0.001, def: 0.9, hint: 'When the picture goes to snow the sound goes with it.' },
-      { key: 'link.audioToBrightness', type: 'float', label: 'Audio → brightness', min: 0, max: 1, step: 0.001, def: 0.35, hint: 'Loud audio drags the high-tension rail down and the picture dims and swells. Real, and almost never emulated.' },
-      { key: 'link.audioToBloom', type: 'float', label: 'Audio → bloom', min: 0, max: 1, step: 0.001, def: 0.25 },
-      { key: 'link.glitchToDropout', type: 'float', label: 'Picture glitch → dropout', min: 0, max: 1, step: 0.001, def: 0.6, hint: 'Head-switch tears and tape dropouts happen on the same damaged patch of tape.' },
-      { key: 'link.degaussToThump', type: 'float', label: 'Degauss → thump', min: 0, max: 1, step: 0.001, def: 0.8, hint: 'The degauss coil dumps a huge current surge. You hear it as much as you see it.' },
-      { key: 'link.powerToAudio', type: 'float', label: 'Power state → audio', min: 0, max: 1, step: 0.001, def: 0.9, hint: 'Switch-on thump and the slow fade-up as the audio stage comes alive.' },
+      { key: 'link.weaveToClatter', type: 'float', label: 'Weave → clatter', min: 0, max: 1, step: 0.001, def: 0.6, hint: 'A frame that lands badly is a frame the claw hit badly: it jumps and it clacks.' },
+      { key: 'link.spliceToPop', type: 'float', label: 'Splice → pop', min: 0, max: 1, step: 0.001, def: 0.7, hint: 'A splice through the gate is a splice past the sound head.' },
+      { key: 'link.dirtToCrackle', type: 'float', label: 'Dirt → crackle', min: 0, max: 1, step: 0.001, def: 0.5, hint: 'The same dirty print: dirt on the picture is dirt on the track.' },
+      { key: 'link.lampToHum', type: 'float', label: 'Lamp → hum', min: 0, max: 1, step: 0.001, def: 0.5, hint: 'One supply feeds the lamp and the exciter: ripple in one is hum in the other.' },
+      { key: 'link.speedToPitch', type: 'float', label: 'Speed → pitch', min: 0, max: 1, step: 0.001, def: 1, hint: 'A camera running slow records its sound slow too.' },
+      { key: 'link.audioToLamp', type: 'float', label: 'Audio → lamp', min: 0, max: 1, step: 0.001, def: 0.15, hint: 'Loud passages draw on the supply and the picture dims.' },
     ],
   },
 ];
 
 export const GROUPS: Group[] = [
   ...ENGINE_GROUP,
-  ...TAPE_GROUPS,
-  ...VIDEO_GROUPS,
+  ...STOCK_GROUPS,
+  ...LENS_GROUPS,
+  ...GATE_GROUPS,
   ...AUDIO_GROUPS,
   ...LINK_GROUPS,
 ];
-
-export const TAPE_GROUP_IDS = TAPE_GROUPS.map((g) => g.id);
-export const VIDEO_GROUP_IDS = VIDEO_GROUPS.map((g) => g.id);
-export const AUDIO_GROUP_IDS = AUDIO_GROUPS.map((g) => g.id);
 
 /* ------------------------------------------------------------------ *
  * Derived lookups
@@ -747,7 +758,13 @@ export const DEFAULTS: Settings = Object.fromEntries(
   PARAMS.map((p) => [p.key, p.def]),
 ) as Settings;
 
-/** Numeric code for an enum value, for shaders and DSP. */
+/** Which master switch owns which tab. */
+const ENGINE_OF: Partial<Record<GroupKind, string>> = {
+  stock: 'engine.stock',
+  lens: 'engine.lens',
+  gate: 'engine.gate',
+};
+
 /**
  * Fold the engine masters down into the per-section bypasses.
  *
@@ -761,19 +778,19 @@ export const DEFAULTS: Settings = Object.fromEntries(
  * allocates nothing.
  */
 export function applyEngineMasters(s: Settings): Settings {
-  const tapeOn = s['engine.tape'] !== false;
-  const tubeOn = s['engine.tube'] !== false;
-  if (tapeOn && tubeOn) return s;
+  const off = Object.values(ENGINE_OF).filter((k) => s[k as string] === false);
+  if (off.length === 0) return s;
 
   const out: Settings = { ...s };
   for (const g of GROUPS) {
     if (!g.enableKey) continue;
-    if (!tapeOn && g.kind === 'tape') out[g.enableKey] = false;
-    if (!tubeOn && g.kind === 'video') out[g.enableKey] = false;
+    const master = ENGINE_OF[g.kind];
+    if (master && s[master] === false) out[g.enableKey] = false;
   }
   return out;
 }
 
+/** Numeric code for an enum value, for shaders and DSP. */
 export function enumCode(key: string, value: ParamValue): number {
   const p = PARAM_BY_KEY[key];
   if (!p || p.type !== 'enum') return 0;
