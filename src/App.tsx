@@ -432,12 +432,7 @@ export default function App() {
 
       const engine = engineRef.current;
       if (engine.ready) {
-        engine.update(
-          activeSettingsRef.current,
-          telemetryRef.current,
-          time,
-          isVideo ? !video.paused : stillPlayingRef.current,
-        );
+        engine.update(activeSettingsRef.current, time, isVideo ? !video.paused : stillPlayingRef.current);
         levelRef.current = engine.level();
       } else {
         levelRef.current = 0;
@@ -560,7 +555,7 @@ export default function App() {
     const video = videoRef.current;
     if (!video || !media || media.kind !== 'video') return;
     try {
-      await engineRef.current.attach(video, settingsRef.current);
+      await engineRef.current.attach(video, settingsRef.current, seedRef.current);
       await engineRef.current.resume();
       setAudioArmed(true);
     } catch (err) {

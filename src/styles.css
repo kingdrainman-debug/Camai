@@ -5,8 +5,8 @@
   --line: #272b2f;
   --text: #d9dee2;
   --muted: #7d858c;
-  --accent: #d8e05a;
-  --accent-dim: #8a9033;
+  --accent: #e8a548;
+  --accent-dim: #94682a;
   --danger: #e2604b;
   --radius: 5px;
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
@@ -799,7 +799,7 @@ input[type='range']:disabled::-webkit-slider-thumb {
 
 .track .key.selected {
   background: #fff;
-  box-shadow: 0 0 0 2px rgba(216, 224, 90, 0.5);
+  box-shadow: 0 0 0 2px rgba(232, 165, 72, 0.5);
 }
 
 /* A hold keyframe cuts rather than fades, so it is drawn as a square. */
@@ -1288,6 +1288,16 @@ input[type='range']:disabled::-webkit-slider-thumb {
 }
 
 .guide-steps li {
+  margin-bottom: 7px;
+}
+
+.guide-list {
+  margin: 0 0 10px;
+  padding-left: 20px;
+  max-width: 74ch;
+}
+
+.guide-list li {
   margin-bottom: 7px;
 }
 

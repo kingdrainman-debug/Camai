@@ -27,13 +27,14 @@ const MIN_PARAM = 60;
 const MIN_SECTION = 120;
 
 const entry = join(root, '.check-help-entry.ts');
-const out = await mkdtemp(join(tmpdir(), 'crtbox-help-'));
+const out = await mkdtemp(join(tmpdir(), 'filmbox-help-'));
 
 try {
   await writeFile(
     entry,
     "export { PARAMS, GROUPS, PARAM_BY_KEY, GROUP_BY_ID } from './src/core/params';\n" +
-      "export { PARAM_HELP, SECTION_HELP } from './src/core/help';\n",
+      "export { PARAM_HELP, SECTION_HELP } from './src/core/help';\n" +
+      "export { PRESET_PROBLEMS, PRESETS } from './src/core/presets';\n",
     'utf8',
   );
 
@@ -78,6 +79,11 @@ try {
     if (!m.GROUP_BY_ID[id]) problems.push(`section help written for ${id}, which is not a group`);
   }
 
+  // Presets are checked here too: a preset naming a parameter that no longer
+  // exists loses that setting silently, which is the same failure in a
+  // different place — something that looks fine until someone notices.
+  for (const p of m.PRESET_PROBLEMS) problems.push(`preset ${p}`);
+
   if (problems.length) {
     console.error('Help check failed:');
     for (const p of problems) console.error(`  • ${p}`);
@@ -90,7 +96,7 @@ try {
     .split(/\s+/).length;
 
   console.log(
-    `help complete — ${m.PARAMS.length} parameters, ${m.GROUPS.length} sections, ${words.toLocaleString('en-GB')} words`,
+    `help complete — ${m.PARAMS.length} parameters, ${m.GROUPS.length} sections, ${words.toLocaleString('en-GB')} words; ${m.PRESETS.length} presets valid`,
   );
 } finally {
   await rm(out, { recursive: true, force: true });

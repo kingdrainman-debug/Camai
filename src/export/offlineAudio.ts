@@ -1,6 +1,7 @@
 import { Settings } from '../core/params';
 import { EMPTY_TIMELINE, Timeline, countKeyframes, evaluateTimeline } from '../core/timeline';
 import { buildChain } from '../audio/engine';
+import { playbackRate, rates } from '../film/clock';
 
 export interface OfflineAudioOptions {
   seed: number;
@@ -13,8 +14,9 @@ export interface OfflineAudioOptions {
   onStage?: (stage: string) => void;
   /**
    * Clip length to render when there is no source file — a still image being
-   * rendered as a video. The chain still produces the whole noise bed, so the
-   * result is a television with nothing playing rather than silence.
+   * rendered as a video. The chain still produces the projector and the
+   * track's own noise, so the result is a film with a silent soundtrack
+   * running through a projector rather than silence.
    */
   duration?: number;
   /** Keyframes to follow while rendering. */
@@ -40,14 +42,9 @@ async function renderWithAutomation(
   timeline: Timeline,
   startTime: number,
   durationSec: number,
+  speed = 1,
 ): Promise<AudioBuffer> {
-  const telemetry = (time: number): AutomationTelemetry => ({
-    humPhase: 0,
-    glitch: 0,
-    powerOpen: 1,
-    time,
-    playing: true,
-  });
+  const telemetry = (time: number): AutomationTelemetry => ({ time, playing: true });
 
   if (countKeyframes(timeline) === 0) {
     chain.update(settings, telemetry(startTime));
@@ -59,7 +56,7 @@ async function renderWithAutomation(
     const at = (i / AUTOMATION_HZ);
     if (at >= durationSec) break;
     ctx.suspend(at).then(() => {
-      chain.update(evaluateTimeline(settings, timeline, startTime + at), telemetry(startTime + at));
+      chain.update(evaluateTimeline(settings, timeline, startTime + at * speed), telemetry(startTime + at * speed));
       void ctx.resume();
     });
   }
@@ -68,9 +65,6 @@ async function renderWithAutomation(
 }
 
 interface AutomationTelemetry {
-  humPhase: number;
-  glitch: number;
-  powerOpen: number;
   time: number;
   playing: boolean;
 }
@@ -79,8 +73,12 @@ interface AutomationTelemetry {
  * Render the processed audio deterministically, off the clock.
  *
  * The worklets keep their own media clock, so an offline render produces the
- * same wow, the same crackle and the same hum-bar-linked hum as the realtime
- * preview did — which is the whole reason the DSP is written that way.
+ * same wow, the same splice pops and the same frame-locked clatter as the
+ * realtime preview did — which is the whole reason the DSP is written that way.
+ *
+ * It can also do one thing the preview cannot: magnetic print-through as a
+ * true pre-echo, which needs the programme from a reel's turn in the future.
+ * Offline, that is just a second copy of the source started early.
  */
 export async function renderProcessedAudio(
   file: Blob | null,
@@ -140,30 +138,50 @@ export async function renderProcessedAudio(
   const start = Math.max(0, opts.start ?? 0);
   const end = Math.min(decoded.duration, opts.end ?? decoded.duration);
   const durationSec = Math.max(0.01, end - start);
-  const frames = Math.ceil(durationSec * sampleRate);
+  // A projector faster than the camera plays the source faster — and higher,
+  // since nothing on a projector corrects pitch. The output is shorter by the
+  // same factor, matching the picture.
+  const speed = playbackRate(rates(settings));
+  const outSec = durationSec / speed;
+  const frames = Math.ceil(outSec * sampleRate);
 
   const ctx = new OfflineAudioContext(2, frames, sampleRate);
   const source = ctx.createBufferSource();
   source.buffer = decoded;
+  source.playbackRate.value = speed;
+
+  // The pre-echo copy: the same programme, one reel's turn ahead.
+  let future: AudioBufferSourceNode | null = null;
+  const printDelay = Math.max(0.05, Number(settings['magnetic.printDelay']) || 1.8);
+  if (settings['magnetic.preEcho'] === true && settings['audio.track'] === 'magnetic') {
+    future = ctx.createBufferSource();
+    future.buffer = decoded;
+    future.playbackRate.value = speed;
+  }
 
   opts.onStage?.('building chain');
   const chain = await buildChain(ctx, source, settings, {
     seed: opts.seed,
     withAnalyser: false,
     gateOnPause: false,
+    future: future ?? undefined,
   });
   chain.output.connect(ctx.destination);
   chain.sync(start, true);
 
   opts.onStage?.('rendering');
   source.start(0, start, durationSec);
+  if (future && start + printDelay < decoded.duration) {
+    future.start(0, start + printDelay, durationSec);
+  }
   const rendered = await renderWithAutomation(
     ctx,
     chain,
     settings,
     opts.timeline ?? EMPTY_TIMELINE,
     start,
-    durationSec,
+    outSec,
+    speed,
   );
   opts.onProgress?.(1);
   chain.dispose();

@@ -14,7 +14,7 @@ import { PRESETS } from '../core/presets';
  * guarded and the fallback is simply to show it.
  */
 
-const STORE_KEY = 'crtbox.guide.hideOnStart';
+const STORE_KEY = 'filmbox.guide.hideOnStart';
 
 export function shouldShowOnStartup(): boolean {
   try {
@@ -35,13 +35,13 @@ function remember(hide: boolean): void {
 
 interface Props {
   onClose(): void;
-  /** Load a preset by id, so a tube can be tried straight from the guide. */
+  /** Load a preset by id, so a film can be tried straight from the guide. */
   onPickPreset(id: string): void;
   /** Opens the file dialog, so the first step is actionable from here. */
   onOpenMedia(): void;
 }
 
-type Section = 'start' | 'engines' | 'tubes' | 'workflow';
+type Section = 'start' | 'engines' | 'films' | 'workflow';
 
 export function Guide({ onClose, onPickPreset, onOpenMedia }: Props) {
   const [section, setSection] = useState<Section>('start');
@@ -72,17 +72,17 @@ export function Guide({ onClose, onPickPreset, onOpenMedia }: Props) {
       className="guide-backdrop"
       role="dialog"
       aria-modal="true"
-      aria-label="CRTBOX guide"
+      aria-label="FILMBOX guide"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
       <div className="guide">
         <header className="guide-head">
-          <span className="logo">▚</span>
+          <span className="logo">▤</span>
           <div className="guide-title">
-            <h1>CRTBOX</h1>
-            <p>Put your footage on a television that should not still be broadcasting.</p>
+            <h1>FILMBOX</h1>
+            <p>Put your footage on a piece of film, and then put the film through everything film went through.</p>
           </div>
           <button ref={closeRef} className="guide-close" onClick={onClose} title="Close (Esc)">
             ✕
@@ -93,8 +93,8 @@ export function Guide({ onClose, onPickPreset, onOpenMedia }: Props) {
           {(
             [
               ['start', 'Getting footage in'],
-              ['engines', 'The two engines'],
-              ['tubes', 'Reference tubes'],
+              ['engines', 'The three engines'],
+              ['films', 'Reference films'],
               ['workflow', 'Building a look'],
             ] as [Section, string][]
           ).map(([id, label]) => (
@@ -111,8 +111,8 @@ export function Guide({ onClose, onPickPreset, onOpenMedia }: Props) {
         <div className="guide-body">
           {section === 'start' && <GettingStarted onOpenMedia={onOpenMedia} onClose={onClose} />}
           {section === 'engines' && <Engines />}
-          {section === 'tubes' && (
-            <Tubes
+          {section === 'films' && (
+            <Films
               onPick={(id) => {
                 onPickPreset(id);
                 onClose();
@@ -129,7 +129,7 @@ export function Guide({ onClose, onPickPreset, onOpenMedia }: Props) {
               checked={hide}
               onChange={(e) => setHidden(e.target.checked)}
             />
-            <span>Don&rsquo;t show this when CRTBOX opens</span>
+            <span>Don&rsquo;t show this when FILMBOX opens</span>
           </label>
           <span className="guide-reopen">Reopen any time with the <strong>Guide</strong> button, or <kbd>F1</kbd>.</span>
           <button className="primary" onClick={onClose}>
@@ -169,41 +169,40 @@ function GettingStarted({
           </button>
         </li>
         <li>
-          <strong>Drop a file on the CRTBOX icon</strong>, or use “Open with”, in the desktop
+          <strong>Drop a file on the FILMBOX icon</strong>, or use “Open with”, in the desktop
           build.
         </li>
       </ol>
 
-      <h2>Still images become clips</h2>
+      <h2>The picture changes eighteen times a second</h2>
       <p>
-        Load a photograph and you still get a transport and a clip length. The still is held while
-        the effects run over it — the hum bar drifts, snow moves, the timebase wobbles, the picture
-        breathes — so the export is a moving image rather than a frozen frame. Set the length under{' '}
-        <em>Export ▸ Clip length</em>.
+        Super 8 runs at 18 frames a second, so the preview does too: each film frame is exposed
+        once and held, however often your screen refreshes. That hold is half of what makes film
+        move like film. Change it under <em>Stock ▸ Format &amp; Stock ▸ Camera speed</em>, and
+        choose the video frame rate under <em>Gate ▸ Framing &amp; Output</em> — anything but the
+        film rate gives the uneven cadence every transfer really had.
       </p>
 
       <h2>What comes out</h2>
       <p>
-        The frame is always the shape of the tube. Pick 4:3 under <em>Tube Geometry ▸ Aspect</em>{' '}
-        and a widescreen source is exported as a genuinely 4:3 file, not a widescreen one with
-        black bars painted into it. The preview shows the same frame, so if you cannot see bars
-        there are none in the file.
+        The frame is the shape of the projected picture. Pick 1.85 under{' '}
+        <em>Gate ▸ Framing &amp; Output ▸ Aspect</em> and the file is 1.85, cropped from the film
+        the way a projection mask crops it, with no bars baked in. Raise <em>Overscan</em> to see
+        past the gate: the frame line, the next frame, and the perforations where the real gauge
+        puts them.
       </p>
       <p>
-        <em>Export ▸ Resolution</em> sets the size. Rendering larger than your source is worth
-        doing here: the scanlines, the shadow mask, the bloom and the curvature are all generated
-        at the output resolution rather than stretched, so they come out genuinely sharp. It cannot
-        invent detail the footage never had, but the tube itself will be crisp at 4K.
+        Still images become clips: the still is held while the film runs over it — new grain every
+        frame, weave, flicker, dirt — so an export is a moving picture, not a frozen one.
       </p>
 
       <h2>Sound is half of it</h2>
       <p>
-        The audio chain runs on your source&rsquo;s own soundtrack: mono collapse, a small speaker
-        in a plastic box, mains hum, the flyback whine a tube makes at 15.7 kHz, tape wow and
-        crackle. Leave <em>A/V Link</em> on — it ties the two together, so the bright band drifting
-        up the screen and the hum in the speaker are the same fault, and losing the picture loses
-        the sound with it. That connection is what makes it feel like one object rather than two
-        effects.
+        Your source&rsquo;s soundtrack is put onto film too: a narrow magnetic stripe, or an
+        optical track with its crackle and its Academy roll-off. And the projector is in the room
+        with you, clattering once a frame. Leave <em>A/V Link</em> on: a frame the claw strikes
+        badly both jumps and clacks, and a splice through the gate pops in the speaker, because
+        they are the same event.
       </p>
     </>
   );
@@ -212,79 +211,57 @@ function GettingStarted({
 function Engines() {
   return (
     <>
-      <h2>One signal path, two emulators</h2>
+      <h2>The chain, in the order the light meets it</h2>
       <p>
-        CRTBOX models two different things, and they are different things. The{' '}
-        <em>Tape</em> tab is the signal: a picture encoded onto a composite carrier,
-        recorded to videotape, read back and decoded again. The <em>Tube</em> tab is the
-        display: the glass, the electron beam, the phosphor and the room the set is
-        sitting in.
+        FILMBOX models what happens to a picture on its way through film, step by step, and every
+        artefact comes from one of those steps rather than from a texture laid on top.
       </p>
+      <ul className="guide-list">
+        <li>
+          <strong>Lens</strong> — exposure, the colour of the light, and the lens itself: its
+          sharpness in line pairs per millimetre of film, its vignetting, fringing and flare.
+        </li>
+        <li>
+          <strong>Stock</strong> — the emulsion. Its characteristic curve (the toe, the straight
+          line, the shoulder), its grain in three layers, halation, its dyes, the print it was made
+          into and how those dyes have faded since.
+        </li>
+        <li>
+          <strong>Gate</strong> — the machinery. The camera&rsquo;s registration and shutter, the
+          projector&rsquo;s weave and shutter, dirt in the gate and dirt on the film, scratches,
+          splices, light leaks, decay, and the telecine that turned it into video.
+        </li>
+      </ul>
       <p>
-        Both run, in that order, on every frame — which is the order it happened in
-        reality. A signal was damaged on its way to the television, and then the
-        television displayed it badly.
-      </p>
-      <p>
-        Each of the two tabs carries a <strong>master switch</strong>, so either engine
-        can be bypassed in one click without going to the tab first. A bypassed engine is
-        struck through on its tab. The two half-looks are both useful on their own: a
-        clean signal on a bad tube, and a bad tape shown flat. Switching one off is also
-        the fastest way to find out which half an artefact you do not want is coming from.
+        Each tab has a master switch that bypasses its whole engine; each section has its own. Use
+        them to find out where something is coming from.
       </p>
 
-      <h2>Why the tape engine matters</h2>
+      <h2>Two things worth knowing</h2>
       <p>
-        Almost nothing in the Tape tab is drawn on. Chroma really is modulated onto a
-        subcarrier at 227.5 cycles per line, band-limited, and separated out again at the
-        other end. Dot crawl, rainbow cross-colour and comb fringing are not effects in
-        this app — they are what you get when that round trip is performed honestly.
+        <strong>The format is physical.</strong> Grain, halation, weave and lens sharpness are all
+        specified on the film, in micrometres and line pairs per millimetre, and the gauge converts
+        them. The same stock on Super 8 is several times grainier than on 35 mm because the frame is
+        enlarged more — you change the gauge, not a grain slider.
       </p>
       <p>
-        That is why <em>Chroma demodulation</em> changes so much. Box is a cheap set and
-        leaves the maximum dot crawl and rainbow. A 2-line comb is a good late-model set
-        and cancels nearly all of it, at the cost of colour fringing wherever the picture
-        moves vertically. Both failures are real, and neither is faked.
-      </p>
-
-      <h2>Where to start in each</h2>
-      <ol className="guide-steps">
-        <li>
-          <strong>Tape ▸ VHS Tape ▸ Tape speed.</strong> Not a style control — it sets the
-          luma and chroma bandwidth the way the real recording mode did. SP is careful, EP
-          is six hours on one cassette with barely any colour left.
-        </li>
-        <li>
-          <strong>Tape ▸ Composite ▸ Chroma demodulation.</strong> The biggest single
-          decision in the signal half.
-        </li>
-        <li>
-          <strong>Tube ▸ Phosphor &amp; Mask ▸ Mask type.</strong> Aperture grille for a
-          Trinitron or an arcade monitor, slot for a normal television, shadow for
-          something older and softer.
-        </li>
-        <li>
-          <strong>Tube ▸ Beam ▸ Beam blooming.</strong> What separates a real tube from a
-          scanline overlay.
-        </li>
-      </ol>
-      <p className="guide-note">
-        Every control in both tabs has an <strong>ⓘ</strong> beside it, and so does every
-        section. If something is not doing what you expect, that is the first place to look.
+        <strong>Grain is on the film.</strong> When the camera&rsquo;s claw misregisters, the image
+        moves and the grain does not. When the projector&rsquo;s gate weaves, the whole strip moves
+        — picture, grain and dust together. That difference is most of what separates real film
+        from a grain overlay.
       </p>
     </>
   );
 }
 
-function Tubes({ onPick }: { onPick(id: string): void }) {
+function Films({ onPick }: { onPick(id: string): void }) {
   return (
     <>
-      <h2>Start from a tube, not from zero</h2>
+      <h2>Start from a piece of film, not from zero</h2>
       <p>
-        Each preset is a specific machine in a specific state rather than an intensity setting —
-        &ldquo;a portable in a kitchen&rdquo; and &ldquo;a failing console in a damp room&rdquo;
-        are not the same effect turned up. Pick the one nearest what you want and adjust from
-        there; almost nobody should build a look from the defaults.
+        Each of these is a particular film in a particular state — a stock, a camera, a lab, a
+        projector, a cupboard — rather than an intensity level. Pick one, then change what is
+        different about yours.
       </p>
       <div className="guide-tubes">
         {PRESETS.map((p) => (
@@ -294,14 +271,6 @@ function Tubes({ onPick }: { onPick(id: string): void }) {
           </button>
         ))}
       </div>
-      <p className="guide-note">
-        Each one sets both engines together, so &ldquo;Third-Generation Tape&rdquo; gives you an
-        EP recording <em>and</em> the tired set it is being played back on, while
-        &ldquo;Arcade Monitor&rdquo; switches the tape half off entirely because an arcade
-        cabinet was fed RGB directly. Clicking one loads it and closes this window. They are also
-        in the dropdown at the top of the app, and <em>Randomise</em> rolls whichever tab you are
-        looking at.
-      </p>
     </>
   );
 }
@@ -309,52 +278,42 @@ function Tubes({ onPick }: { onPick(id: string): void }) {
 function Workflow() {
   return (
     <>
-      <h2>The short version</h2>
+      <h2>Building a look</h2>
       <ol className="guide-steps">
         <li>
-          Load footage, pick a reference tube. That sets both the Tape and the Tube halves at
-          once.
+          <strong>Choose the gauge and the stock.</strong> They decide the grain, the curve, the
+          colour and the frame rate. Reversal (Kodachrome, Ektachrome) clips highlights hard and is
+          most of why Super 8 looks the way it does; negative holds everything and is printed.
         </li>
         <li>
-          Adjust in the sidebar. Every control has an <strong>ⓘ</strong> next to it that explains
-          what it physically is, what each end of its range looks like and when to reach for it.
-          Every section has one too.
+          <strong>Set the exposure.</strong> Reversal is unforgiving: half a stop shows. A negative
+          will take two stops either way. Exposure is where the stock&rsquo;s character shows most.
         </li>
         <li>
-          Every parameter is shown, including the fine-detail ones. If the list is more
-          than you want, untick <strong>Advanced</strong> in the header to hide them.
+          <strong>Give the camera its faults.</strong> Registration error, exposure flicker and a
+          flash frame at the head of each shot. Super 8&rsquo;s plastic pressure plate is worth
+          20–40 µm of weave.
         </li>
-        <li>Export. Choose a format, an aspect and a resolution, then render.</li>
+        <li>
+          <strong>Then age it.</strong> Dye fading by years and storage, dust, a scratch that lasts
+          a few seconds, a splice or two, fog at the start of the roll. Little and often beats a lot
+          at once.
+        </li>
       </ol>
 
-      <h2>Animating — where the unsettling cuts come from</h2>
+      <h2>Animate it</h2>
       <p>
-        Every parameter can be keyframed. Click the <strong>◷</strong> beside any control to start
-        animating it; arming seeds a keyframe holding the current value, so switching it on never
-        changes the picture. After that, move the playhead and change the value and a keyframe is
-        written where you are.
-      </p>
-      <p>
-        The timeline below the picture draws a lane per animated parameter. Drag the diamonds,
-        press <kbd>Delete</kbd> to remove one, and set easing per keyframe — including{' '}
-        <strong>hold</strong>, which steps instead of interpolating and is how you get a hard cut
-        rather than a fade. Switches and dropdowns always hold, because there is no value half way
-        between a slot mask and an aperture grille.
-      </p>
-      <p>
-        The single most effective thing to animate is <em>Glitching ▸ Event rate</em>: leave it at
-        zero, ramp it up for a few frames and the picture tears itself apart, then drop it back and
-        the set recovers. <em>Signal ▸ Signal loss</em> does the same for a whole transmission,
-        taking the audio with it.
+        Click the <strong>◷</strong> beside any parameter to animate it, scrub, and change the
+        value to write a keyframe. Numbers interpolate; stocks and switches hold, because there is
+        no stock half way between Kodachrome and Vision3. Hold keyframes cut — ramp a light leak in
+        over three frames and out again, or bring a scratch in for one shot.
       </p>
 
-      <h2>Keeping and sharing a look</h2>
+      <h2>Save it</h2>
       <p>
-        <strong>Save…</strong> writes a <code>.crtbox.json</code> carrying every parameter and all
-        its keyframes; <strong>Load…</strong> brings it back. <strong>Copy</strong> and{' '}
-        <strong>Paste</strong> do the same through the clipboard, which is the easy way to send a
-        look to someone else. Presets only store what differs from the defaults, so they stay
-        readable and hand-editable.
+        <strong>Save…</strong> writes a <code>.filmbox.json</code> carrying every parameter and all
+        the keyframes. <strong>Copy</strong> puts the same thing on the clipboard. The desktop
+        build can render from the command line with a preset file and no window at all.
       </p>
     </>
   );
