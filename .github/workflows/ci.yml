@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck and build
+        run: npm run build
+
+      - name: Install Chromium for the smoke test
+        run: npx --yes playwright@1.49.1 install --with-deps chromium
+
+      # tsc cannot catch a shader that fails to compile or a worklet that fails
+      # to register, which are the two ways this app actually breaks. The smoke
+      # test drives the built bundle in a real browser and asserts the picture
+      # comes out lit, with contrast, and with measurable scanline structure.
+      - name: Smoke test
+        run: npm run smoke
+
+      - name: Verify the Windows packaging config
+        # `dir` is the one Windows target that needs no wine, so the packaging
+        # configuration is validated on every push rather than only on release.
+        # Resource editing is skipped because that is the step wine is for.
+        run: npx electron-builder --win dir --x64 -c.win.signAndEditExecutable=false
+
+      - name: Confirm the exe was produced
+        run: test -f release/win-unpacked/CRTBOX.exe && echo "CRTBOX.exe packaged"

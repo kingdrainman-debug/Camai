@@ -1,0 +1,113 @@
+name: Windows build
+
+# Produces the two things a Windows user can double-click:
+#
+#   CRTBOX-<version>-Setup.exe      one-click installer, no wizard, makes a
+#                                   desktop and Start Menu shortcut, then runs
+#   CRTBOX-<version>-Portable.exe   a single file that just opens
+#
+# This has to run on a Windows runner. Two reasons: editing the exe's icon and
+# version resources needs native tooling (or wine), and `ffmpeg-static` installs
+# the binary for whatever platform npm runs on — building on Linux would ship a
+# Linux ffmpeg inside a Windows app, and the mp4/mov/gif export targets would
+# silently disappear.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'Attach the build to a GitHub release'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify the ffmpeg binary is the Windows one
+        shell: pwsh
+        run: |
+          $p = node -e "process.stdout.write(require('ffmpeg-static'))"
+          if (-not $p.EndsWith('.exe')) {
+            throw "ffmpeg-static resolved to '$p', which is not a Windows binary"
+          }
+          & $p -version | Select-Object -First 1
+
+      - name: Typecheck and build the renderer
+        run: npm run build
+
+      - name: Package
+        run: npx electron-builder --win --x64 --publish never
+
+      - name: Check the artefacts exist
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem release -Filter *.exe
+          if ($files.Count -lt 2) {
+            Get-ChildItem release | Format-Table -AutoSize
+            throw "expected an installer and a portable exe, found $($files.Count)"
+          }
+          $files | Select-Object Name, @{n='MB';e={[math]::Round($_.Length/1MB,1)}} | Format-Table -AutoSize
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crtbox-windows
+          path: |
+            release/*.exe
+            release/*.blockmap
+          if-no-files-found: error
+          retention-days: 30
+
+      # When the workflow is triggered by a tag push the tag is already there.
+      # When it is dispatched from a branch there is none, so the release is cut
+      # at the version in package.json and action-gh-release creates the tag at
+      # this commit. That keeps releasing possible from an environment that can
+      # push branches but not tags.
+      - name: Work out the release tag
+        id: tag
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            echo "name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=v$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.name }}
+          name: CRTBOX ${{ steps.tag.outputs.name }}
+          files: |
+            release/*.exe
+          draft: false
+          generate_release_notes: true
+          body: |
+            ## Download
+
+            - **[CRTBOX Setup](../../releases/latest)** — double-click, it installs
+              itself and opens. A desktop shortcut is created.
+            - **CRTBOX Portable** — a single file, nothing is installed. Double-click
+              and it runs.
+
+            The build is not code-signed, so Windows SmartScreen shows
+            "Windows protected your PC" the first time. Choose **More info →
+            Run anyway**.

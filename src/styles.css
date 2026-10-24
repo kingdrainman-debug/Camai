@@ -1,0 +1,1479 @@
+:root {
+  --bg: #0a0b0c;
+  --panel: #141618;
+  --panel-2: #1b1e21;
+  --line: #272b2f;
+  --text: #d9dee2;
+  --muted: #7d858c;
+  --accent: #d8e05a;
+  --accent-dim: #8a9033;
+  --danger: #e2604b;
+  --radius: 5px;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.45 var(--sans);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+select,
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: #3b4249;
+  background: #232729;
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #14160a;
+  font-weight: 600;
+}
+
+button.primary:hover:not(:disabled) {
+  background: #e4ec6a;
+}
+
+button.danger {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+button.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+  padding: 2px 6px;
+}
+
+button.ghost:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--panel-2);
+}
+
+select,
+input[type='number'],
+input[type='text'],
+textarea {
+  background: #0e1012;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 4px 6px;
+}
+
+input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  height: 16px;
+  cursor: pointer;
+}
+
+input[type='range']::-webkit-slider-runnable-track {
+  height: 3px;
+  background: #2c3136;
+  border-radius: 2px;
+}
+
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 11px;
+  height: 11px;
+  margin-top: -4px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: none;
+}
+
+input[type='range']::-moz-range-track {
+  height: 3px;
+  background: #2c3136;
+  border-radius: 2px;
+}
+
+input[type='range']::-moz-range-thumb {
+  width: 11px;
+  height: 11px;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+input[type='range']:disabled::-webkit-slider-thumb {
+  background: #4a5057;
+}
+
+/* ---------------- layout ---------------- */
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.app.batch {
+  visibility: hidden;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.brand .logo {
+  color: var(--accent);
+  font-size: 16px;
+  letter-spacing: -2px;
+}
+
+.brand .name {
+  font-weight: 700;
+  letter-spacing: 0.16em;
+}
+
+.brand .tagline {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+
+.topbar-actions .divider,
+.transport .divider {
+  width: 1px;
+  height: 18px;
+  background: var(--line);
+  margin: 0 4px;
+}
+
+.inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.inline input[type='range'] {
+  width: 72px;
+}
+
+.inline.seed input {
+  width: 76px;
+}
+
+.body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+/* ---------------- sidebar ---------------- */
+
+.sidebar {
+  width: 372px;
+  min-width: 300px;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+}
+
+.tabs {
+  display: flex;
+  border-bottom: 1px solid var(--line);
+}
+
+/* Each tab is a row: the label, and for the two engines a master bypass. */
+.tabs .tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border-bottom: 2px solid transparent;
+  padding-right: 4px;
+  min-width: 0;
+}
+
+.tabs .tab.active {
+  border-bottom-color: var(--accent);
+}
+
+.tabs button {
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  padding: 9px 0 9px 4px;
+  color: var(--muted);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tabs .tab.active button {
+  color: var(--text);
+}
+
+/* A bypassed engine is struck through, so it reads as off at a glance even
+   from the other tab. */
+.tabs .tab.bypassed button {
+  color: var(--muted);
+  text-decoration: line-through;
+  opacity: 0.65;
+}
+
+.tab-switch {
+  flex-shrink: 0;
+  transform: scale(0.78);
+  transform-origin: center;
+}
+
+.groups {
+  flex: 1;
+  overflow-y: auto;
+  padding-bottom: 12px;
+}
+
+.sidebar-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* ---------------- parameter groups ---------------- */
+
+.group {
+  border-bottom: 1px solid var(--line);
+}
+
+.group.disabled .group-body {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+.group-head {
+  display: flex;
+  align-items: center;
+  padding: 0 8px 0 0;
+}
+
+.group-toggle {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 9px 8px;
+  text-align: left;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.group-toggle:hover {
+  background: var(--panel-2);
+}
+
+.group .chevron {
+  color: var(--muted);
+  font-size: 10px;
+  width: 10px;
+}
+
+.group .dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.group-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.switch {
+  position: relative;
+  width: 30px;
+  height: 16px;
+  display: inline-block;
+  cursor: pointer;
+}
+
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.switch span {
+  position: absolute;
+  inset: 0;
+  background: #2c3136;
+  border-radius: 999px;
+  transition: background 0.12s;
+}
+
+.switch span::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #6c757d;
+  transition: transform 0.12s, background 0.12s;
+}
+
+.switch input:checked + span {
+  background: var(--accent-dim);
+}
+
+.switch input:checked + span::after {
+  transform: translateX(14px);
+  background: var(--accent);
+}
+
+.group-body {
+  padding: 2px 12px 12px;
+}
+
+.group-hint {
+  color: var(--muted);
+  font-size: 11px;
+  margin: 0 0 10px;
+  line-height: 1.5;
+}
+
+.group-hint.muted {
+  opacity: 0.7;
+  font-style: italic;
+}
+
+/* ---------------- parameters ---------------- */
+
+.param {
+  margin-bottom: 9px;
+}
+
+.param-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 1px;
+}
+
+.param-label {
+  flex: 1;
+  font-size: 12px;
+  color: #b8bfc5;
+}
+
+.param.modified .param-label {
+  color: var(--text);
+}
+
+.param-value {
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.param-readout {
+  background: transparent;
+  border: none;
+  padding: 1px 3px;
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.param-readout em {
+  color: var(--muted);
+  font-style: normal;
+  margin-left: 2px;
+}
+
+.param-entry {
+  width: 68px;
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 1px 4px;
+}
+
+.param .reset {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  padding: 0 2px;
+  font-size: 11px;
+}
+
+.param .reset:disabled {
+  opacity: 0;
+}
+
+.param input[type='range'] {
+  width: 100%;
+  display: block;
+}
+
+.param-bool {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+}
+
+.param-enum select {
+  width: 100%;
+}
+
+.param-hint {
+  color: var(--muted);
+  font-size: 10.5px;
+  margin: 4px 0 0;
+  line-height: 1.45;
+}
+
+/* ---------------- main pane ---------------- */
+
+.main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.stage {
+  flex: 1;
+  position: relative;
+  min-height: 0;
+  background:
+    radial-gradient(ellipse at 50% 40%, #131517 0%, #08090a 70%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/*
+  Sized in JS to the export frame's aspect, so what you see is the file you get.
+  No width/height here: an inline style sets both, and a rule with `100%` would
+  only fight it while the canvas is being measured.
+*/
+.stage canvas {
+  position: relative;
+  z-index: 1;
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  image-rendering: auto;
+  box-shadow: 0 0 0 1px #1b1e21;
+}
+
+/*
+  The <video>/<img> the renderer reads from. Full size and fully rendered —
+  Chromium will not present frames for an invisible video element — but sitting
+  underneath the canvas, which is opaque and covers the stage.
+*/
+.stage .decoder {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+.dropzone {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  text-align: center;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.dropzone button {
+  pointer-events: auto;
+}
+
+.dropzone .muted {
+  max-width: 380px;
+  font-size: 11px;
+  opacity: 0.75;
+}
+
+.arm-audio {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  background: rgba(20, 22, 24, 0.9);
+  backdrop-filter: blur(4px);
+}
+
+.transport {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.transport .play {
+  width: 34px;
+}
+
+.transport .time {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  min-width: 38px;
+}
+
+.transport .scrub {
+  flex: 1;
+}
+
+.transport .split input {
+  width: 110px;
+}
+
+/* ---------------- timeline ---------------- */
+
+.timeline {
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+
+.timeline-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 10px;
+}
+
+.timeline-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 7px 10px;
+  text-align: left;
+}
+
+.timeline-toggle:hover {
+  background: var(--panel-2);
+}
+
+.timeline-toggle .title {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.timeline-toggle .count {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.timeline-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+
+.timeline-tools .sel-label {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--mono);
+}
+
+.timeline-tools .sel-label strong {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.timeline-body {
+  max-height: 190px;
+  overflow-y: auto;
+  border-top: 1px solid var(--line);
+}
+
+.timeline-empty {
+  margin: 0;
+  padding: 12px 14px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--muted);
+  max-width: 720px;
+}
+
+.stopwatch-demo {
+  color: var(--accent);
+  font-size: 13px;
+}
+
+.timeline-grid {
+  display: flex;
+  min-height: 0;
+}
+
+.timeline-names {
+  width: 180px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--line);
+}
+
+.ruler-spacer {
+  height: 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.track-name {
+  height: 24px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px 0 10px;
+  font-size: 11px;
+  color: #b8bfc5;
+  border-bottom: 1px solid #1d2023;
+}
+
+.track-name span {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.track-name button {
+  font-size: 10px;
+  padding: 0 3px;
+}
+
+.timeline-lanes {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  /* A keyframe at t=0 is centred on the left edge; without this its left half
+     spills over the track-name column. */
+  overflow: hidden;
+}
+
+.ruler {
+  position: relative;
+  height: 20px;
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+}
+
+.ruler .tick {
+  position: absolute;
+  top: 3px;
+  transform: translateX(-50%);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.ruler .tick::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 14px;
+  width: 1px;
+  height: 5px;
+  background: var(--line);
+}
+
+.track {
+  position: relative;
+  height: 24px;
+  border-bottom: 1px solid #1d2023;
+  cursor: crosshair;
+  background: repeating-linear-gradient(
+    to right,
+    transparent 0,
+    transparent 39px,
+    #191c1f 39px,
+    #191c1f 40px
+  );
+}
+
+.track:hover {
+  background-color: #17191c;
+}
+
+/* Keyframes are diamonds, as they are in every editor that has them. */
+.track .key {
+  position: absolute;
+  top: 50%;
+  width: 11px;
+  height: 11px;
+  padding: 0;
+  margin: 0;
+  border: 1px solid #0a0b0c;
+  border-radius: 2px;
+  background: var(--accent);
+  transform: translate(-50%, -50%) rotate(45deg);
+  cursor: grab;
+}
+
+.track .key:hover {
+  background: #f2f97a;
+}
+
+.track .key.selected {
+  background: #fff;
+  box-shadow: 0 0 0 2px rgba(216, 224, 90, 0.5);
+}
+
+/* A hold keyframe cuts rather than fades, so it is drawn as a square. */
+.track .key.hold {
+  border-radius: 0;
+  transform: translate(-50%, -50%);
+  width: 9px;
+  height: 13px;
+}
+
+.playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--danger);
+  pointer-events: none;
+}
+
+.playhead::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -4px;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 6px solid var(--danger);
+}
+
+/* ---------------- stopwatch on a parameter ---------------- */
+
+.param .stopwatch,
+.param .keymark {
+  background: transparent;
+  border: none;
+  padding: 0 2px;
+  font-size: 12px;
+  line-height: 1;
+  color: #4d545a;
+}
+
+.param .stopwatch:hover,
+.param .keymark:hover {
+  color: var(--text);
+}
+
+.param .stopwatch.on {
+  color: var(--accent);
+}
+
+.param .keymark.on {
+  color: var(--accent);
+}
+
+.param.animated .param-label {
+  color: var(--accent);
+}
+
+.param-bool {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.param-bool label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1;
+  cursor: pointer;
+}
+
+/* ---------------- export dock ---------------- */
+
+.dock {
+  background: var(--panel);
+  padding: 10px 12px 12px;
+  max-height: 42%;
+  overflow-y: auto;
+}
+
+.dock h2 {
+  margin: 0 0 8px;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.export .row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.export .row.actions {
+  align-items: center;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.field.small input,
+.field.small select {
+  width: 78px;
+}
+
+.field.check {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+
+.export-hint,
+.status,
+.warn {
+  font-size: 11px;
+  color: var(--muted);
+  margin: 0 0 8px;
+  line-height: 1.5;
+}
+
+.status.error,
+.warn {
+  color: var(--danger);
+}
+
+.warn code {
+  font-family: var(--mono);
+}
+
+.field.time input {
+  width: 92px;
+  font-family: var(--mono);
+  text-align: right;
+}
+
+.range-note {
+  font-size: 11px;
+  color: var(--muted);
+  padding-bottom: 5px;
+  flex: 1;
+  min-width: 180px;
+  line-height: 1.45;
+}
+
+.progress {
+  flex: 1;
+  height: 5px;
+  background: #23272a;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress div {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.1s linear;
+}
+
+/* ---------------- overlays ---------------- */
+
+.toast {
+  position: fixed;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 8px 14px;
+  cursor: pointer;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  z-index: 30;
+}
+
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 40;
+}
+
+.sheet {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px;
+  width: min(680px, 90vw);
+}
+
+.sheet h3 {
+  margin: 0 0 10px;
+  font-size: 13px;
+}
+
+.sheet textarea {
+  width: 100%;
+  height: 300px;
+  font-family: var(--mono);
+  font-size: 11px;
+  resize: vertical;
+  margin-bottom: 10px;
+}
+
+.sheet .row {
+  display: flex;
+  gap: 8px;
+}
+
+.fatal {
+  padding: 48px;
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+.fatal h1 {
+  letter-spacing: 0.2em;
+  color: var(--accent);
+}
+
+/* ---------------- narrow windows ---------------- */
+
+@media (max-width: 1080px) {
+  .sidebar {
+    width: 320px;
+  }
+
+  .brand .tagline {
+    display: none;
+  }
+}
+
+/* ---------------- information widgets ---------------- */
+
+/*
+  The ⓘ affordance. Dim until hovered so a sidebar of 100 controls does not
+  become a wall of icons, but always present rather than appearing on hover —
+  a control that only exists when the pointer is over it cannot be discovered.
+*/
+.param-info-btn,
+.group-info-btn {
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  color: var(--muted);
+  opacity: 0.45;
+  font-size: 12px;
+  line-height: 1;
+  padding: 1px 3px;
+  cursor: pointer;
+  transition: opacity 0.12s, color 0.12s;
+}
+
+.param:hover .param-info-btn,
+.group:hover .group-info-btn {
+  opacity: 0.8;
+}
+
+.param-info-btn:hover,
+.group-info-btn:hover,
+.param-info-btn.on,
+.group-info-btn.on {
+  opacity: 1;
+  color: var(--accent);
+}
+
+.param.showing-info {
+  background: var(--panel-2);
+  border-radius: var(--radius);
+}
+
+.param-info,
+.group-info {
+  border-left: 2px solid var(--accent-dim);
+  margin: 6px 0 2px;
+  padding: 2px 0 2px 9px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text);
+  /* Explanations are for reading, so let them be selected and copied. */
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.param-info p,
+.group-info p {
+  margin: 0 0 6px;
+}
+
+.param-info p:last-child,
+.group-info p:last-child {
+  margin-bottom: 0;
+}
+
+.param-facts {
+  color: var(--muted);
+  font-size: 10.5px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.param-facts code {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--accent-dim);
+  margin-left: auto;
+}
+
+.group-info {
+  margin: 0 12px 10px;
+  padding-left: 10px;
+}
+
+.group-info .how strong {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* ---------------- guide ---------------- */
+
+.guide-btn {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}
+
+.guide-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 60;
+  padding: 24px;
+}
+
+.guide {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  width: min(840px, 100%);
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6);
+}
+
+.guide-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.guide-head .logo {
+  color: var(--accent);
+  font-size: 22px;
+  letter-spacing: -3px;
+  line-height: 1;
+}
+
+.guide-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.guide-title h1 {
+  margin: 0;
+  font-size: 15px;
+  letter-spacing: 0.16em;
+  font-weight: 700;
+}
+
+.guide-title p {
+  margin: 3px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.guide-close {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 15px;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+
+.guide-close:hover {
+  color: var(--text);
+}
+
+.guide-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--line);
+  padding: 0 10px;
+  gap: 2px;
+}
+
+.guide-tabs button {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  padding: 9px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.guide-tabs button:hover {
+  color: var(--text);
+}
+
+.guide-tabs button.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.guide-body {
+  padding: 16px 18px;
+  overflow-y: auto;
+  font-size: 12.5px;
+  line-height: 1.68;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.guide-body h2 {
+  margin: 18px 0 7px;
+  font-size: 11.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.guide-body h2:first-child {
+  margin-top: 0;
+}
+
+.guide-body p {
+  margin: 0 0 9px;
+  max-width: 74ch;
+}
+
+.guide-body em {
+  color: var(--text);
+  font-style: normal;
+  font-weight: 600;
+}
+
+.guide-body code {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--accent);
+}
+
+.guide-body kbd {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 3px;
+  padding: 0 4px;
+  background: var(--panel-2);
+}
+
+.guide-steps {
+  margin: 0 0 10px;
+  padding-left: 20px;
+  max-width: 74ch;
+}
+
+.guide-steps li {
+  margin-bottom: 7px;
+}
+
+.guide-inline {
+  background: transparent;
+  border: none;
+  border-bottom: 1px dashed var(--accent-dim);
+  border-radius: 0;
+  color: var(--accent);
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+.guide-tubes {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.guide-tube {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  align-items: flex-start;
+  text-align: left;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 9px 11px;
+  cursor: pointer;
+  font: inherit;
+  color: var(--text);
+}
+
+.guide-tube:hover {
+  border-color: var(--accent-dim);
+  background: #22262a;
+}
+
+.guide-tube strong {
+  font-size: 12.5px;
+}
+
+.guide-tube span {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.guide-note {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.guide-foot {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 11px 18px;
+  border-top: 1px solid var(--line);
+  background: var(--panel-2);
+  border-radius: 0 0 10px 10px;
+  flex-wrap: wrap;
+}
+
+.guide-foot .check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.guide-foot .check:hover {
+  color: var(--text);
+}
+
+.guide-reopen {
+  font-size: 11px;
+  color: var(--muted);
+  margin-left: auto;
+}
+
+.guide-reopen strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.guide-foot .primary {
+  padding: 6px 20px;
+}
+
+/* A narrow window puts the guide edge to edge rather than letting it scroll
+   sideways. */
+@media (max-width: 720px) {
+  .guide-backdrop {
+    padding: 0;
+  }
+
+  .guide {
+    border-radius: 0;
+    border: none;
+    height: 100%;
+  }
+
+  .guide-foot {
+    border-radius: 0;
+  }
+
+  .guide-reopen {
+    display: none;
+  }
+}
+
+.dropzone-guide {
+  background: transparent;
+  border: none;
+  border-bottom: 1px dashed var(--accent-dim);
+  border-radius: 0;
+  color: var(--accent);
+  padding: 0 0 1px;
+  margin-top: 4px;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.dropzone-guide:hover {
+  color: var(--text);
+  border-bottom-color: var(--text);
+}
+
+/*
+  Backend toggle. Three segments in one pill, so which one is live is visible
+  without opening anything.
+*/
+.backend-toggle {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--panel-2);
+}
+
+.backend-toggle button {
+  font: inherit;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 4px 9px;
+  cursor: pointer;
+  position: relative;
+}
+
+.backend-toggle button + button {
+  border-left: 1px solid var(--line);
+}
+
+.backend-toggle button:hover {
+  color: var(--text);
+  background: #22262a;
+}
+
+.backend-toggle button.active {
+  color: #16180a;
+  background: var(--accent);
+  font-weight: 600;
+}
+
+/*
+  Under Auto, mark which backend actually won. A dot rather than another
+  highlight, so it reads as information and not as a second selection.
+*/
+.backend-toggle button.resolved::after {
+  content: '';
+  position: absolute;
+  bottom: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--accent);
+}
