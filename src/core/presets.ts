@@ -40,7 +40,7 @@ function preset(
  * character here, so changing the defaults never changes a saved look.
  */
 export const PRESETS: Preset[] = [
-  preset('super8-1974', 'Super 8 Kodachrome, 1974', 'A 50 ft Kodachrome 40 sound cartridge, shot in daylight through the camera’s built-in 85 filter on a cheap zoom, projected at home a dozen times since. The flagship: 18 fps, reversal, a soft slow lens, a plastic pressure plate and a cartridge that leaks at both ends.', {
+  preset('super8-1974', 'Super 8 Kodachrome, 1974', 'A 50 ft Kodachrome 40 sound cartridge, shot in daylight through the camera’s built-in 85 filter on a cheap zoom, projected at home a dozen times since. The flagship: 18 fps, reversal, a soft slow lens, a plastic pressure plate and a cartridge that pipes light along its perforated edge.', {
     'format.gauge': 'super8',
     'format.stock': 'kodachrome40',
     'exposure.light': 'daylight',
@@ -72,9 +72,8 @@ export const PRESETS: Preset[] = [
     'scratch.width': 18,
     'splice.rate': 1.5,
     'splice.kind': 'tape',
-    'leak.rollFog': 1.1,
-    'leak.edgeFog': 0.12,
-    'leak.amount': 0.15,
+    'leak.edgeFog': 0.18,
+    'leak.amount': 0.2,
     'fade.years': 50,
     'halation.amount': 1.4,
     'audio.track': 'magnetic',

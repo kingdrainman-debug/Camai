@@ -15,7 +15,7 @@
  */
 
 import { build } from 'vite';
-import { mkdtemp, rm, writeFile, unlink } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -83,6 +83,13 @@ try {
   // exists loses that setting silently, which is the same failure in a
   // different place — something that looks fine until someone notices.
   for (const p of m.PRESET_PROBLEMS) problems.push(`preset ${p}`);
+
+  // The CLI help sends people to docs/PRESETS.md for the ids, so it has to
+  // list every one. It is generated: run \`npm run docs\`.
+  const presetDoc = await readFile(join(root, 'docs', 'PRESETS.md'), 'utf8').catch(() => '');
+  for (const p of m.PRESETS) {
+    if (!presetDoc.includes(`\`${p.id}\``)) problems.push(`docs/PRESETS.md does not list ${p.id} — run npm run docs`);
+  }
 
   if (problems.length) {
     console.error('Help check failed:');

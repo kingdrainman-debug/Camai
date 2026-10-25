@@ -14,7 +14,7 @@
 
 import { DEFAULTS, ParamValue, Settings, applyEngineMasters, sanitize } from '../core/params';
 import { PRESETS } from '../core/presets';
-import { frameState, rates } from '../film/clock';
+import { frameState, geometry, rates } from '../film/clock';
 import { BackendChoice, createRenderer } from '../video/backend';
 
 export type ProbeSource =
@@ -262,7 +262,13 @@ export async function renderProbe(req: ProbeRequest): Promise<ProbeResult> {
 
 declare global {
   interface Window {
-    __filmbox?: { renderProbe: typeof renderProbe; defaults: Settings; presets: Record<string, Settings> };
+    __filmbox?: {
+      renderProbe: typeof renderProbe;
+      defaults: Settings;
+      presets: Record<string, Settings>;
+      /** Shape of the output frame for these settings — the app's own answer. */
+      aspect(settings: Record<string, ParamValue>, srcW: number, srcH: number): number;
+    };
   }
 }
 
@@ -271,5 +277,6 @@ export function installProbe(): void {
     renderProbe,
     defaults: DEFAULTS,
     presets: Object.fromEntries(PRESETS.map((p) => [p.id, p.settings])),
+    aspect: (settings, srcW, srcH) => geometry(applyEngineMasters(sanitize(settings, DEFAULTS)), srcW, srcH).outAspect,
   };
 }

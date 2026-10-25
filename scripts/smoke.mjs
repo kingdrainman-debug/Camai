@@ -781,15 +781,15 @@ async function settledStats(page, { minMean = 20, tolerance = 2.5, timeout = 150
     await page.waitForSelector('.guide', { timeout: 3000 }).catch(() => undefined);
     out.reopened = (await page.$('.guide')) !== null;
     await page.evaluate(() => [...document.querySelectorAll('.guide-tabs button')].find((b) => b.textContent.includes('Reference'))?.click());
-    await page.waitForSelector('.guide-tube', { timeout: 3000 }).catch(() => undefined);
-    out.films = await page.evaluate(() => document.querySelectorAll('.guide-tube').length);
+    await page.waitForSelector('.guide-film', { timeout: 3000 }).catch(() => undefined);
+    out.films = await page.evaluate(() => document.querySelectorAll('.guide-film').length);
     await page.evaluate(() => {
       const box = document.querySelector('.guide-foot .check input');
       if (box && !box.checked) box.click();
     });
     await page.evaluate(() => document.querySelector('.guide-close')?.click());
     await page.reload({ waitUntil: 'load' });
-    await page.waitForSelector('.stage canvas', { timeout: 10000 });
+    await page.waitForFunction(() => !!window.__filmbox && !!document.querySelector('.stage canvas'), null, { timeout: 60000 });
     out.hidden = (await page.$('.guide')) === null;
     await page.keyboard.press('F1');
     await page.waitForSelector('.guide', { timeout: 3000 }).catch(() => undefined);

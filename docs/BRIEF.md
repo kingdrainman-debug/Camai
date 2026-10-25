@@ -1,346 +1,362 @@
-# CRTBOX — design brief
+# FILMBOX — brief for a film-stock and format emulator
 
-*A cathode-ray television emulator for picture **and** sound, modelled on the shape of
-[ntsc-rs](https://ntsc.rs/) but aimed at a different machine.*
+*A prompt for a fresh Claude Code session. Paste the whole thing.*
 
----
-
-## 1. What this is, and why it is not ntsc-rs
-
-ntsc-rs emulates a **signal**. It models what NTSC transmission and VHS encoding do to a
-picture on its way to a display: chroma subsampling, composite crosstalk, tape head
-misalignment, tracking error. It is, quite deliberately, a *tape and broadcast* effect. The
-display itself is out of scope — ntsc-rs hands you a clean, flat, square-pixel image that has
-been damaged in the ways a tape damages images.
-
-CRTBOX emulates the **display**. The signal chain is still here, because you cannot
-sensibly model a television without modelling what arrives at its aerial socket, but it is
-the front half of a longer pipeline. The back half — the part ntsc-rs stops before — is the
-tube: a curved glass bottle with three electron guns in the neck, a perforated steel mask a
-few millimetres behind the phosphor, a deflection yoke that never scanned a perfect
-rectangle, and a power supply that sags when you turn the volume up.
-
-That last clause is the whole thesis of this project.
-
-**A television is one machine.** The picture and the sound share a chassis, a mains
-transformer, an aerial and a high-tension rail. When the signal degrades, both degrade. When
-the mains ripples, a bright bar crosses the screen *and* a hum appears in the speaker —
-because they are the same ripple. When the audio stage draws current on a loud passage, the
-picture dims. Every tool in this space treats picture and sound as two unrelated effects
-that happen to be applied to the same file. CRTBOX treats them as two outputs of one
-simulated device, and gives you an explicit **A/V Link** section to decide how tightly they
-are coupled.
-
-Nothing else in this application matters as much as that section.
+*Written by the session that built CRTBOX (this repository), so the hard-won
+parts are included rather than left to be rediscovered.*
 
 ---
 
-## 2. Functional map: ntsc-rs → CRTBOX
+## What to build
 
-Everything ntsc-rs's standalone app does has a counterpart here, redesigned around the tube.
+**FILMBOX** — a real-time film emulator for video and stills, covering stocks
+and formats rather than televisions: Super 8, Regular 8, 16mm, Super 16, 35mm,
+65mm. Picture *and* sound. It ships as a single-click Windows application, a
+headless CLI, and a web app.
 
-| ntsc-rs standalone | CRTBOX | What changed |
-|---|---|---|
-| Split-screen preview | Split preview with a draggable wipe | Same idea; the wipe is continuous rather than a fixed half |
-| Scrollable effect settings, left pane | Three tabbed panes: **Picture**, **Sound**, **A/V Link** | The audio half is new, and the link section has no counterpart |
-| Collapsible parameter groups | Same, with a bypass switch and a per-group reset on each | Bypass lets you A/B one stage without losing its settings |
-| Copy / Paste settings as JSON | Same, plus Save/Load to a `.crtbox.json` file | Only non-default values are written, so presets stay readable |
-| Scale control above the settings | Render scale in the export dock | Preview always fits the window; scale only affects output |
-| Render settings saved with effect settings | Same | |
-| Export H.264/HEVC `.mp4`, ProRes `.mov`, GIF | Same, plus WebM and PNG-sequence + WAV | ffmpeg drives the first three in the desktop build |
-| Audio passed through on ProRes export | Audio **processed** and muxed on every format that carries it | The point of the app |
-| Command-line arguments for every parameter | `crtbox --input … --output … --<group>.<param> V` | Same design: every parameter is addressable from a script |
-| Real-time, multithreaded, SIMD | Real-time on the GPU (WebGL2) + AudioWorklet DSP | Different substrate, same requirement |
-| Random seed | Seed + a randomiser with an *amount* control, scoped to the visible tab | Rolling everything at full strength always produces the same mess |
-
-Two things ntsc-rs has that CRTBOX does not, and should be honest about: it is not an After
-Effects / Premiere / OpenFX plugin, and its signal model is a genuine port of
-`composite-video-simulator` lineage work rather than a from-scratch approximation. CRTBOX's
-signal stage is an approximation tuned by eye; its tube stage is where the original work is.
-
----
-
-## 3. What a CRT actually looks like
-
-The failure mode of every CRT filter is that it multiplies the picture by a sine wave, adds a
-vignette, and calls the result scanlines. What follows is the list of things that are
-actually happening, in the order the light encounters them.
-
-### 3.1 The raster is not a grid of pixels
-
-A CRT draws a **spot** that sweeps horizontally while its brightness is modulated. There are
-no columns. Horizontal resolution is limited by the *bandwidth* of the video amplifier, not
-by any pixel structure — which is why the horizontal and vertical characters of a CRT image
-are completely different, and why a naïve "scanline overlay" never looks right.
-
-Vertically there genuinely is discrete structure: 240 lines with 240 gaps on a 240p source,
-or 480 interlaced lines drawn in two alternating fields. CRTBOX reconstructs the picture as a
-**sum of beam profiles** — for each output pixel it samples the four nearest line centres and
-weights them by `exp(-(d/halfWidth)^shape)`.
-
-This matters more than it sounds. If the profile is too wide, adjacent lines sum to a
-constant and the scanlines cancel out completely — a bug that was in this codebase until the
-smoke test caught it. The beam has to fall close to zero between line centres for any line
-structure to survive at all.
-
-### 3.2 Bright lines are physically fatter
-
-This is the single most important detail, and the one most emulations omit. Beam current
-does not just make a line brighter; it makes the spot larger. On a real tube, a white line is
-visibly taller than a grey one, so highlights **swell into the gaps** while shadows keep
-crisp scanlines. That non-uniformity is what your eye reads as "CRT" rather than "scanline
-filter". It is the `Beam blooming` parameter, and turning it to zero makes everything else
-look wrong.
-
-### 3.3 The mask
-
-Three kinds, and they are not interchangeable:
-
-- **Aperture grille** (Trinitron): continuous vertical RGB stripes, no vertical structure at
-  all. Bright, sharp, and the reason Trinitrons looked the way they did.
-- **Slot mask**: vertical stripes chopped into staggered slots. What most consumer
-  televisions used.
-- **Shadow mask / delta triad**: round holes on a hexagonal lattice, alternate rows offset by
-  half a triad. The softest of the three.
-
-The mask blocks roughly two thirds of the light that reaches it. A real set compensated by
-running far more beam current. CRTBOX normalises both the beam profile and the mask to unit
-mean, so changing mask type, mask pitch or beam width changes the *texture* of the picture
-without changing its *exposure* — the boost controls are then genuine artistic gain rather
-than a correction you have to keep re-doing.
-
-Below about three screen pixels per triad the mask stops being texture and becomes moiré.
-That is not a bug; it is what happens when you photograph a CRT, and it is exposed as a
-parameter.
-
-### 3.4 Phosphor persistence is per-channel
-
-Phosphors keep emitting after the beam has gone. P22 green (the zinc silicate family)
-outlasts the blue by a wide margin, so **motion trails on a consumer television skew green**.
-CRTBOX gives persistence a *tilt* control for exactly this.
-
-The persistence blend is `max(current, previous × decay)`, not a sum — a decaying trail must
-never be brighter than the highlight that caused it. Decay is expressed as a half-life and
-converted per-field, so the trail length is the same at 24, 30 or 60 fps.
-
-### 3.5 Halation is not bloom
-
-Two different phenomena, usually conflated:
-
-- **Bloom**: a tight glow immediately around bright areas.
-- **Halation**: light that has entered the faceplate, bounced off its front surface, and
-  re-emerged some distance away. It is much wider, much softer, and **warm**, because red
-  scatters furthest through glass.
-
-Both are here, on separate blur chains at different resolutions, with a warmth control on the
-halation. Adding a third, flat veil — `Glass diffusion` — accounts for the fact that
-thirty-year-old faceplate glass is not clear glass, and it is the parameter that lifts the
-blacks in a way that reads as *old* rather than as *washed out*.
-
-### 3.6 Convergence error grows towards the corners
-
-Three guns fire at the same phosphor dot from three different angles. Convergence was
-adjusted at the centre of the screen, so the residual error is smallest there and grows
-outward. Uniform RGB offsets look like a chromatic-aberration filter; radial ones look like a
-television. Both are exposed, and the radial term is on by default.
-
-The same geometry argument applies to focus: the beam travels further to reach a corner and
-lands as a bigger, softer blob, so `Edge defocus` is a separate control from `Defocus`.
-
-### 3.7 Geometry is the service menu
-
-Curvature is the obvious one, but the parameters that make a set feel *individual* are the
-trim adjustments nobody ever got quite right: H/V size and position, pincushion, trapezoid,
-and — the one that sells it — **rotation**, because the deflection yoke was glued on slightly
-crooked at the factory on almost every set ever made. The default is 0.25°, and it is
-deliberately not zero.
-
-Overscan belongs here too. Sets deliberately scanned past the bezel, so 4–8% of every edge
-was never seen by anyone. Turning overscan off is the fastest way to make CRT footage look
-like a filter rather than a recording.
-
-### 3.8 The failure modes
-
-- **Hum bar**: mains ripple riding on the video rail — a soft bright band drifting slowly up
-  the screen. It drifts because mains frequency and frame rate are never exactly locked.
-- **Flagging**: the top few lines bend sideways because the timebase has not settled after
-  the vertical interval.
-- **Head-switch band**: the torn, noisy strip along the very bottom of every tape playback.
-- **AGC pumping**: automatic gain control chasing the average picture level, always a beat
-  behind.
-- **PSU sag**: a bright picture pulls the high-tension rail down, so large white areas dim
-  and swell. Also driven by *audio* level — see §5.
-- **Degauss**: a decaying radial ripple that magnetises the mask and warps colour. Fired from
-  a button, because it is an event, not a state.
-- **Burn-in**: a slow running average of the picture, subtracted. Whatever sat still —
-  a station logo, a paused frame — is permanently dimmer.
-- **Power on/off**: the raster opens vertically from a line as the tube warms, and collapses
-  back to a line and then a fading dot when it is switched off.
-
----
-
-## 4. The audio problem
-
-This is the half nobody builds, so it is worth setting out the reasoning rather than just the
-parameter list.
-
-### 4.1 What "sounds like a TV" actually is
-
-The instinct is to reach for a low-pass filter and some hiss. That gets you maybe a third of
-the way, and the result sounds like *muffled modern audio* rather than like a television.
-The three things that actually carry the illusion are:
-
-1. **The enclosure.** A 6 cm paper cone stapled into a hollow plastic box, firing sideways or
-   at the floor. The box has strongly excited standing-wave modes that ring for a few
-   milliseconds. A resonance in *time* is not something an EQ curve can produce, which is why
-   CRTBOX synthesises a small-box impulse response from the cabinet dimensions and convolves
-   with it. The `Cabinet size` control resizes the box and rebuilds the IR — 0 is a portable
-   on a kitchen counter, 1 is a wooden console the size of a sideboard.
-
-2. **Mono.** Not "reduced stereo" — one speaker. Every pre-1984 set, and most sets long
-   after. Collapsing the image is more important to the illusion than any filter, because
-   modern stereo is instantly recognisable as modern. CRTBOX offers a partial collapse (0.7
-   keeps a hint of width) and, as a fourth option, the **difference channel** (L−R): the MTS
-   stereo subcarrier on its own, in which anything panned centre — which is almost always the
-   dialogue — cancels out completely. It is the single most unsettling thing in the audio
-   section and it is a real signal that really existed.
-
-3. **Never silent.** Digital silence is the tell. The noise bed is several quiet layers
-   rather than one loud one, because that is how real noise floors are constituted.
-
-### 4.2 The noise bed, layer by layer
-
-**Mains hum** is two different sounds and they are usually confused:
-
-- A **ground loop** buzzes on the *odd* harmonics of the mains fundamental — 50/60, 150/180,
-  250/300 Hz. It is a buzz, not a hum.
-- A **transformer** sings at *twice* line frequency — 100/120 Hz — because magnetostriction
-  does not care which way the magnetic field points. It is a hum, not a buzz.
-
-CRTBOX models them separately, lets you blend them, and drifts the fundamental slowly so the
-hum breathes instead of sitting still.
-
-**Flyback whine** is the signature CRT sound and almost nobody adds it. The line-output
-transformer's windings physically vibrate at the horizontal scan rate: **15.734 kHz on NTSC,
-15.625 kHz on PAL**. It sits close enough to the limit of hearing that children hear it
-clearly as a piercing whistle while many adults cannot perceive it at all — which is precisely
-why it is such an effective unease device. CRTBOX adds the fundamental plus second and third
-partials (the difference between a pure tone and a *sick* set), drifts it, and offers an
-optional octave-down shift to ~7.9 kHz so it survives lossy codecs, laptop speakers and older
-ears.
-
-Crucially, the whine is **not** routed through the speaker chain. It is not in the signal
-path — it is a transformer vibrating inside a cabinet, radiating into the room. Low-passing it
-through a simulated paper cone would destroy it. The noise bed is therefore split into two
-buses: *signal* noise (hum, hiss, static, contact crackle) which is added before the speaker
-and shaped by it, and *acoustic* noise (flyback whine, mechanical rumble, degauss thump)
-which is added after.
-
-**Tape hiss** is high-passed white noise, with a `breathing` control: companding noise
-reduction mis-tracks, so the hiss swells back up whenever the programme goes quiet — which is
-exactly when you notice it.
-
-**RF static** is broadband and rides the video `Signal loss` parameter, so when the picture
-goes to snow, the sound goes with it.
-
-### 4.3 Crackle
-
-Crackle is impulsive, sparse and random, and it is what actually sells decay. Getting it
-right means getting the *statistics* right:
-
-- Events are **Poisson-distributed**, so the spacing never sounds metronomic.
-- Amplitudes follow a **power law**, so most clicks are tiny and occasionally one is a bang.
-  A uniform distribution sounds like rain on a tent; a power law sounds like a bad joint.
-- Each click is a resonator rung by an impulse — a decaying sinusoid at a randomised
-  frequency — so the tone varies from tick to thud.
-- A separate **burst** process occasionally raises the rate forty-fold for a few hundred
-  milliseconds: a corroded connector or a dry joint arcing.
-
-All of it runs in an AudioWorklet, because sample-accurate event scheduling is not something
-the built-in Web Audio nodes can do.
-
-### 4.4 Wow, flutter and dropouts
-
-Pitch instability comes from a modulated fractional delay line with Catmull-Rom
-interpolation — genuine pitch modulation, not a chorus:
-
-- **Wow** (~0.6 Hz): once-per-revolution error from an eccentric capstan or a warped reel.
-- **Flutter** (~9 Hz): faster wobble from the idler and guides.
-- **Random drift**: a slow random walk on top, which is what stops the wobble sounding like
-  an LFO and starts it sounding like a mechanism wearing out.
-- **Scrape flutter**: very fast stick-slip against the heads. Adds roughness, not pitch.
-
-The delay amplitude is derived from the target pitch deviation as `ε / (2πf)`, so the audible
-depth of the wobble is independent of its rate — moving the rate slider does not silently
-change how much it wobbles.
-
-**Dropouts** are a Poisson process with a fast-in, slower-out envelope and a click at each
-edge, because the edge of a dropout is a click, not a fade.
-
-### 4.5 Ordering
-
-The chain runs in the order the signal physically travels:
+It is a sibling to **CRTBOX**, which is this repository and which you should
+read before writing anything:
 
 ```
-programme → input trim → channel matrix → transport → + signal noise
-          → speaker & enclosure → broadcast processing → + acoustic noise
-          → distance (off-axis, through-the-wall, room tail) → limiter
+https://github.com/kingdrainman-debug/Analoguehorrorbox
 ```
 
-The compressor sits **after** the band limiting, not before it, because a television's audio
-stage only ever saw the band-limited signal — it pumps in response to what survived the
-filters, not to the full-range mix. This is a small reordering with a clearly audible result.
+MIT licensed, so you may fork it outright. Doing so is recommended: roughly 70%
+of what FILMBOX needs already exists there and is tested. What changes is the
+physics, the parameter schema and the presets. What stays is the whole
+apparatus around them.
+
+**Do not make a "film grain filter."** Grain overlays and orange LUTs are a
+solved, boring problem and there are a thousand of them. The thing worth
+building models the *chain*: light hits an emulsion, the emulsion has a
+characteristic curve, the film goes through a camera with a bad gate, gets
+developed, printed, projected or telecined, and ages badly in a cupboard. Every
+artefact should fall out of modelling a step in that chain, not out of a texture
+you multiplied on top.
 
 ---
 
-## 5. The A/V Link
+## The domain
 
-The section that justifies the whole project. Each of these is a real coupling in a real
-television:
+Treat the following as a starting map, not as gospel — verify the numbers as you
+implement them. Film is extremely well documented and the real figures are
+findable.
 
-| Link | Physical basis |
-|---|---|
-| **Hum bar → hum** | The bar crossing the screen and the hum in the speaker are the *same* mains ripple. Locking them is instantly convincing and nobody does it. |
-| **Signal loss → static** | One aerial. When the picture goes, the sound goes. |
-| **Audio → brightness** | Loud audio drags the high-tension rail down; the picture dims and swells. Real, and almost never emulated. |
-| **Audio → bloom** | Same sag, seen as beam widening rather than dimming. |
-| **Picture glitch → dropout** | A head-switch tear and a tape dropout happen on the same damaged patch of oxide. |
-| **Degauss → thump** | The degauss coil is a large inductive load switched straight onto the mains. You hear it as much as you see it. |
-| **Power state → audio** | Switch-on thump, and the slow fade-up as the audio stage comes alive. |
+### The emulsion
 
-Implementation note: rather than messaging state between the GPU and the audio thread — which
-would be both laggy and unavailable during offline rendering — the renderer and the worklets
-each evaluate *the same deterministic function of media time*. They agree because they are
-computing the same thing, not because they are talking to each other. That is also what makes
-an offline export produce identical wow, crackle and hum-bar-linked hum to the live preview.
+**The characteristic curve (H&D curve) is the single most important thing.**
+Density against log exposure: a *toe* where shadows compress, a long straightish
+middle, and a *shoulder* where highlights roll off. This curve, not grain, is
+why film looks like film. A highlight that would clip hard on a sensor instead
+bends gently into the shoulder and holds detail for another two or three stops.
+Model it as a real curve with controllable toe, slope (gamma), shoulder position
+and shoulder softness — and give each stock its own.
+
+**Negative vs reversal is a fork, not a slider.**
+- *Colour negative* has enormous highlight latitude, crushes nothing, carries an
+  orange mask, and must then be printed — so you need a second curve for the
+  print stock. The combination is what produces the look.
+- *Reversal* (Kodachrome, Ektachrome) is a positive directly, has perhaps a third
+  of the latitude, and clips highlights hard and ugly. Most Super 8 was reversal,
+  which is a large part of why Super 8 looks the way it does.
+
+**Grain is not noise.** Common mistakes, all worth avoiding:
+- It is not additive. Grain is silver crystals; its visibility depends on
+  *density*. In a negative the shadows are thin and the grain shows most in the
+  midtones and shadows of the resulting positive. Model it as density-dependent.
+- It is not per-channel white noise. Each of the three emulsion layers has its
+  own grain size and the layers are not correlated. Blue-sensitive layers are
+  typically grainiest.
+- It clumps. Real grain has structure and a power spectrum, not a flat one.
+  Value noise at a couple of octaves beats white noise.
+- **It is fixed to the film plane.** Grain does not move with the subject. If the
+  gate weaves, the grain weaves *with the gate*, not with the picture. Getting
+  this wrong is the fastest way to make it look like a video filter.
+- Grain size scales with the *format*, because a smaller negative is enlarged
+  more. The same stock in Super 8 and in 35mm gives wildly different apparent
+  grain. Derive it rather than exposing it twice.
+
+**Halation** is different from CRTBOX's. Light passes through the emulsion,
+reflects off the base, and re-exposes from behind — giving the red-orange bloom
+around highlights. It is red-dominant because the anti-halation backing absorbs
+unevenly, and stocks without that backing (early stocks, some reversal) glow
+spectacularly. CRTBOX's halation pass is a reasonable starting point but the
+tint and falloff are not the same.
+
+### The formats
+
+Format drives grain scale, resolution, aspect, frame rate and how bad the
+transport is. Get the real dimensions.
+
+| Format | Image area (approx) | Native fps | Character |
+|---|---|---|---|
+| Regular 8 | 4.5 × 3.3 mm | 16 | Tiniest frame, enormous grain, usually silent |
+| **Super 8** | 5.79 × 4.01 mm | 18 (also 24) | Bigger gate than Reg8, plastic pressure plate, *terrible* registration |
+| 16mm | 10.26 × 7.49 mm | 24 | Documentary and news; grain present but sharp |
+| Super 16 | 12.52 × 7.41 mm | 24 | Wider, intended for blow-up |
+| 35mm Academy | 22 × 16 mm | 24 | The reference |
+| 65/70mm | 52.5 × 23 mm | 24 | Nearly grainless, enormous |
+
+Super 8 deserves to be the flagship preset: 18 fps, reversal stock, heavy grain,
+a soft slow zoom lens, dreadful gate weave, and light leaks from the cartridge.
+
+### The transport, the projector, the telecine
+
+This is where most of the *motion* character lives, and it is the part people
+usually skip.
+
+- **Gate weave.** The frame wanders because the registration is imprecise.
+  Super 8's plastic pressure plate is notorious. Model it as low-frequency 2D
+  translation plus a little rotation, with the grain and dirt moving with the
+  gate where appropriate.
+- **Frame-to-frame exposure flicker.** Spring-wound cameras do not hold speed,
+  and shutters vary. This is the iconic Super 8 shimmer.
+- **Projector shutter flicker** is separate: a 2- or 3-blade shutter interrupts
+  the light at 2× or 3× the frame rate.
+- **Dust and hair, in two distinct kinds.** Dirt *in the gate* is stationary in
+  the frame and persists for many frames, and hairs at the gate edge wiggle.
+  Dirt *on the film* appears for one frame and is gone. Both exist; they look
+  completely different; most emulations only do the second.
+- **Scratches / tramlines.** Vertical lines that persist across a shot because a
+  piece of grit is in the gate. Base-side scratches read bright, emulsion-side
+  scratches read dark or coloured. They should last seconds, not frames.
+- **Splices**: a jump plus a flash frame. **Cue marks**: the circle in the top
+  right corner at reel changes.
+- **Focus breathing** as the film buckles in the gate from lamp heat.
+- **3:2 pulldown** if telecined to 29.97, which produces the characteristic
+  judder — a real and very recognisable artefact.
+
+### Age and damage
+
+- **Dye fading.** The cyan dye in Eastman colour stocks fades fastest, which is
+  why so many 1970s and 80s prints are now pink-magenta. This is a specific,
+  recognisable, per-dye decay, not a generic desaturation.
+- **Vinegar syndrome**: acetate decay, buckling, channelling.
+- **Light leaks and edge fog**, especially at the start and end of a cartridge.
+  Super 8 cartridges leaked constantly.
+- **Mould, water marks, emulsion lifting.**
+
+### The lens
+
+Super 8 cameras had small, slow zooms: soft corners, low contrast, veiling
+flare, visible chromatic aberration. 35mm anamorphic is a different world —
+oval bokeh, horizontal blue flares, focus breathing. Worth a section of its own.
+
+### Sound — do not treat this as an afterthought
+
+CRTBOX's single best decision was taking audio as seriously as picture, and the
+film equivalents are at least as rich:
+
+- **Super 8 magnetic stripe**: a very narrow stripe of oxide, so limited
+  bandwidth, audible hiss, and wow/flutter from a tiny capstan. Print-through
+  (a pre-echo from adjacent windings) is a lovely, rarely emulated detail.
+- **16mm/35mm optical track**: variable-area or variable-density. Dirt on the
+  track becomes crackle, scratches become ticks, and the distortion character is
+  specific and unlike magnetic tape.
+- **The Academy curve**: the deliberate high-frequency rolloff that cinema
+  playback applied for decades.
+- **Projector noise.** The mechanical clatter of the mechanism in the room, at
+  the frame rate and its harmonics. This is the direct analogue of CRTBOX's
+  flyback whine, which turned out to be the single most evocative sound in the
+  whole application. Do this one well.
+
+### Link picture and sound
+
+CRTBOX's "A/V Link" section ties the two halves together and is the thing that
+makes it feel like one object rather than two effects. Carry the idea over with
+film's own couplings:
+
+- Projector clatter locked to the frame rate *and* to gate weave, so the picture
+  judder and the mechanical noise are the same event.
+- A splice gives a picture jump **and** an audio pop.
+- Optical-track dirt and picture dirt come from the same dirty print.
+- Lamp flicker and the amplifier's supply, as in CRTBOX.
 
 ---
 
-## 6. Deliberate non-goals
+## Architecture to reuse from CRTBOX
 
-- **Not a plugin.** No After Effects / Premiere / OpenFX host integration. The pipeline is
-  GPU shaders plus Web Audio, and the standalone app is the product.
-- **Not a signal-accurate NTSC decoder.** If you want a faithful port of the
-  composite-video-simulator lineage, use ntsc-rs — and then feed its output into this. The two
-  compose well precisely because they model different halves of the path.
-- **Not a monitor calibration tool.** The colour handling is perceptual, not colorimetric.
-- **No cloud anything.** Decoding, processing and export all happen on the machine.
+Read these before designing anything. They are the parts that took longest to
+get right.
+
+**`src/core/params.ts` — a schema-driven everything.** One file describes ~260
+parameters (key, label, type, range, default, unit, hint, advanced flag,
+group, group kind). From it are generated: the entire settings UI, the shader
+uniforms, the preset format, the CLI flags, the randomiser and the keyframe
+system. Adding a parameter is one entry and it is immediately animatable,
+savable, CLI-addressable and randomisable. **Keep this.** It is the reason the
+app grew to 260 parameters without the UI code growing at all.
+
+**Two render backends behind one interface.** `src/video/backend.ts` picks
+between a WebGL2 renderer and a pure-JavaScript CPU renderer, with Auto falling
+back rather than failing. The CPU path exists for machines where WebGL2 is
+missing or blocked, for headless batch rendering, and for bit-identical
+deterministic output. The smoke test asserts the two agree. Worth carrying over;
+it is about 2,300 lines and already written.
+
+**`src/core/help.ts` + `scripts/check-help.mjs`.** Every parameter and every
+section has a written explanation surfaced by an ⓘ disclosure, and the build
+*fails* if a parameter exists without one or if the text is too short to be
+saying anything. This is why the app is navigable at 260 parameters. Keep the
+enforcement, not just the convention — it caught four stubs that would otherwise
+have shipped.
+
+**The guide.** A startup overlay with three or four tabs answering what someone
+needs in the first minute, closeable, reopenable with F1, with a remembered
+"don't show again". Not a manual.
+
+**The keyframe timeline.** `src/core/timeline.ts` plus `src/ui/Timeline.tsx`:
+every parameter animatable, numbers interpolate, enums and switches hold
+(because there is no value half way between two film stocks). Easing per
+keyframe including a hard hold. For film this matters most for damage events —
+ramp a splice or a light leak in over three frames and out again.
+
+**Engine master switches.** CRTBOX has two engines (Tape, Tube) each with a
+master bypass that folds down into its sections' individual bypasses. FILMBOX
+has the same natural split — **Stock** (emulsion, curve, grain, dyes) and
+**Gate** (transport, projector, damage, telecine) — plus a lens section. Fold
+masters into section bypasses rather than teaching the renderers about them, so
+both backends cannot disagree.
+
+**`scripts/smoke.mjs`.** Fourteen stages driving the real UI in a real browser.
+Discussed below; it is the most valuable file in the project.
+
+**Packaging.** Electron + electron-builder, NSIS one-click plus portable, a
+GitHub Actions workflow that builds on a Windows runner and can cut a release
+and create the tag itself. Lift it wholesale.
 
 ---
 
-## 7. Where the risk is
+## Lessons already paid for
 
-Honest assessment of what is weakest:
+These cost real time in the CRTBOX build. Do not re-learn them.
 
-- **The signal stage is tuned by eye.** Dot crawl, cross-colour and ringing are plausible
-  approximations of the artefacts, not derived from a modelled subcarrier. They look right;
-  they are not a simulation.
-- **Browser export is real-time capture.** In a tab, video export goes through MediaRecorder,
-  which drops frames if the machine cannot keep up. The deterministic path (PNG sequence, or
-  ffmpeg in the desktop build) is the one to use for anything going into an edit.
-- **`decodeAudioData` is the audio export bottleneck.** Some containers play fine in a
-  `<video>` but cannot be decoded for offline rendering. When that happens the video still
-  exports; the audio silently does not, and the app says so rather than failing the render.
-- **The mask normalisation is a CPU mirror of the shader's mask function.** Two copies of the
-  same maths that must be kept in step. It is commented on both sides, but it is a real
-  maintenance hazard.
+1. **`texSubImage2D` from a `<video>` silently writes nothing.** The call
+   succeeds, `glGetError` is clean, and the texture keeps its previous contents
+   — so video renders black forever while `<img>` works fine. Use `texImage2D`
+   unconditionally.
+
+2. **Hand-rolled path→URL conversion breaks on Windows.** Splitting a path and
+   running `encodeURIComponent` over each segment turns `C:` into `C%3A`, which
+   Chromium will not resolve, so the file dialog silently loads nothing — on the
+   only platform the app ships to, while working perfectly on Linux and in CI.
+   Use `node:url`'s `pathToFileURL`. Better still, read the bytes and use a blob
+   URL so playback never depends on a file URL at all.
+
+3. **Seeking resets things you did not mean to reset.** CRTBOX cleared its
+   phosphor-persistence buffers on the `seeking` event, which is correct when a
+   user scrubs and catastrophic during an export — frame-stepping *is* seeking,
+   so trails were wiped before every single frame and no rendered video ever had
+   them. Any frame-to-frame accumulator (and film has several: gate dirt,
+   scratches, print-through) needs the same care.
+
+4. **The export frame must be the shape you asked for.** CRTBOX derived export
+   dimensions from the source and let the shader letterbox inside it, so
+   choosing 4:3 produced a 16:9 file with bars baked in. Compute the output
+   frame from the *format's* aspect, in one shared function used by both the
+   preview canvas and the export. Film has strong opinions about aspect —
+   1.33, 1.37 Academy, 1.66, 1.85, 2.39 — so this matters more here.
+
+5. **`gl_FragCoord` is the pixel centre, origin bottom-left.** When writing a
+   CPU renderer to match a GPU one, passing integer top-left indices puts every
+   screen-space pattern half a pixel out in x and half a pixel plus a flip out
+   in y. On a 3-pixel pattern that is a sixth of a cycle and plainly visible.
+   This caused an 18-unit brightness difference that took a bisect to find.
+
+6. **A parameter can exist in the schema and never reach the shader.** The
+   control moves, the uniform is never set, nothing happens, and nothing fails.
+   Assert in a test that each new section actually changes the picture.
+
+7. **Fixed `sleep()` in a browser test is a flaky test.** Several stages
+   intermittently sampled a frame before it was drawn, which reads as
+   "perfectly flat" and fails for reasons unrelated to the thing under test.
+   Poll for the condition, or wait until two consecutive samples agree.
+
+8. **`pkill -f "scripts/smoke.mjs"` matches its own shell** and kills the
+   command running it. Mildly funny, cost ten minutes.
+
+---
+
+## How to test this
+
+CRTBOX's smoke test is a Playwright script driving the real UI and asserting
+*emergent behaviour*, not pixel equality. That distinction is what makes it
+useful. Examples worth copying in spirit:
+
+- Shaders compile and link (type-checking cannot catch a broken shader).
+- A test pattern comes out lit, with contrast, and with the expected structure.
+- A video fixture actually reaches the renderer.
+- The app loads over `file://` — the packaged build uses `loadFile`, and
+  testing only over HTTP is exactly how a `file://`-only defect shipped.
+- Keyframes measurably animate the output and the midpoint eases rather than
+  steps.
+- Both render backends produce the same picture within tolerance.
+
+For FILMBOX the equivalents are better still, because film artefacts are
+measurable:
+
+- **The characteristic curve**: feed a synthetic exposure ramp and assert the
+  measured output has a toe and a shoulder — that the slope near black and near
+  white is lower than the slope in the middle. That is the curve existing,
+  proven from the output.
+- **Grain is fixed to the gate, not the subject**: pan the source and assert the
+  grain pattern does *not* track it; weave the gate and assert it does.
+- **Grain scales with format**: the same stock at Super 8 and 35mm must differ
+  measurably in grain power.
+- **Negative vs reversal latitude**: push a highlight ramp and assert reversal
+  clips sooner and harder than negative.
+- **Gate dirt persists, film dirt does not**: assert a gate speck survives N
+  frames and a film speck does not.
+- **Cyan-dye fading is per-dye**: assert faded output shifts toward magenta
+  specifically, rather than just desaturating.
+- **3:2 pulldown**: assert the judder pattern is 3:2 and not uniform.
+
+Also keep `scripts/check-help.mjs` (build fails on undocumented parameters) and
+`scripts/bench.mjs` (both backends, with an honest note that a container has no
+GPU so the numbers are a floor).
+
+---
+
+## Working practices that mattered
+
+- **Measure, do not assume.** Several confident diagnoses in the CRTBOX build
+  were wrong, and the bisect or the probe found the real cause in minutes. When
+  a measurement looks surprising, suspect the measurement first: a dot-crawl
+  test showed "no movement" purely because the probe downsampled a 227-cycle
+  pattern into nothing.
+- **Say what you did not verify.** One fix in CRTBOX — the Windows path bug —
+  could only be reasoned about, never executed, because the container is Linux.
+  That was stated plainly in the commit and in every summary afterwards. Do the
+  same rather than implying everything was proven.
+- **New sections ship inert.** When CRTBOX gained Colour and Glitching sections,
+  their defaults were neutral and off so that no existing look changed; the
+  character went into the presets instead. Users notice when their saved work
+  renders differently.
+- **Presets are specific machines, not intensity levels.** "A Super 8 cartridge
+  shot on a spring-wound camera in 1974 and projected twice since" is a preset.
+  "Film 60%" is not. CRTBOX's ten presets are each a particular object in a
+  particular state and that is why they are useful.
+- **Commit messages carry the reasoning**, especially why something was *not*
+  done the obvious way.
+
+---
+
+## Suggested order
+
+1. Fork CRTBOX. Get it building, run `npm test`, read `src/core/params.ts`,
+   `src/video/renderer.ts` and `scripts/smoke.mjs`.
+2. Strip the CRT/VHS-specific passes and parameters; keep the apparatus.
+3. Build the **Stock** engine: characteristic curve first (it is the foundation),
+   then density-dependent grain, then dyes and halation.
+4. Build the **Gate** engine: weave, flicker, dirt in both kinds, scratches,
+   splices, pulldown.
+5. Add the **Lens** section.
+6. Rebuild the audio chain for magnetic stripe, optical track and projector
+   noise, and wire the A/V link.
+7. Write presets as specific objects: Super 8 Reversal 1974, 16mm Documentary,
+   35mm Print Fourth Generation, Faded Eastman, Home Movie Found In A Loft.
+8. Write the help text for every parameter, with the check enforcing it.
+9. Smoke stages for everything above.
+10. Package and release.
+
+Super 8 end to end is a better first milestone than all six formats half done.

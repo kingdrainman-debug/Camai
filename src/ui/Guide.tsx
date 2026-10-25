@@ -263,9 +263,9 @@ function Films({ onPick }: { onPick(id: string): void }) {
         projector, a cupboard — rather than an intensity level. Pick one, then change what is
         different about yours.
       </p>
-      <div className="guide-tubes">
+      <div className="guide-films">
         {PRESETS.map((p) => (
-          <button key={p.id} className="guide-tube" onClick={() => onPick(p.id)}>
+          <button key={p.id} className="guide-film" onClick={() => onPick(p.id)}>
             <strong>{p.name}</strong>
             <span>{p.description}</span>
           </button>

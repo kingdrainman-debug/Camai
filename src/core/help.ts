@@ -302,7 +302,7 @@ export const PARAM_HELP: Record<string, string> = {
   'leak.position': 'Where round the frame the light gets in, as a fraction of the way round from the right-hand edge.',
   'leak.speed': 'How quickly the leak flares and fades. Leaks track camera movement and how the light falls on the camera body, so they come and go over seconds.',
   'leak.edgeFog': 'Light piped along the perforated edge of the film from the cartridge, fogging that side of every frame. A thin orange band down one side is characteristic of some Super 8 cameras.',
-  'leak.rollFog': 'Fog on the first and last frames of a load, from loading and unloading in daylight. The roll length comes from the gauge, so the fog returns at the start of every cartridge — 3,600 frames on Super 8.',
+  'leak.rollFog': 'Fog on the first and last frames of a load, from loading and unloading in daylight. The clip is taken to start at the head of a load, so its opening second is burned orange — including the paused first frame — and the fog returns wherever the gauge’s roll ends: every 3,600 frames on Super 8.',
   'leak.warmth': 'Colour of leaked light. Light coming through the base reaches the red-sensitive layer first, so leaks are orange-red; 0 treats it as white light hitting the emulsion from the front.',
 
   /* ---------------- decay ---------------- */

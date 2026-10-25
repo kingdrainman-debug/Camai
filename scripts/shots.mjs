@@ -89,21 +89,14 @@ for (const id of ids) {
     async ({ id, frame }) => {
       const settings = window.__filmbox.presets[id];
       // Height fixed; width follows the preset's own projection aspect.
-      const probe = await window.__filmbox.renderProbe({
-        backend: 'gpu',
-        settings,
-        source: { kind: 'scene' },
-        width: 16,
-        height: 9,
-        frames: [0],
-      });
-      void probe;
+      const height = 600;
+      const width = Math.round((height * window.__filmbox.aspect(settings, 1280, 720)) / 2) * 2;
       return window.__filmbox.renderProbe({
         backend: 'gpu',
         settings,
         source: { kind: 'scene' },
-        width: 900,
-        height: 600,
+        width,
+        height,
         srcWidth: 1280,
         srcHeight: 720,
         frames: [frame],

@@ -901,8 +901,8 @@ export default function App() {
 
     // The preview canvas is resized to the output resolution for the duration
     // of the render, then put back. Rendering at preview size and upscaling
-    // would move the mask pitch and the scanline count relative to the picture,
-    // which is exactly the thing that must not change.
+    // would enlarge the grain along with the picture, when grain is meant to
+    // be generated at the resolution it is seen at.
     const savedW = canvas.width;
     const savedH = canvas.height;
     const savedTime = videoRef.current?.currentTime ?? 0;
@@ -1560,6 +1560,7 @@ export default function App() {
                 }}
               />
             )}
+            {media && <div className="stage-cover" />}
             <canvas key={backendChoice} ref={canvasRef} />
             {!media && (
               <div className="dropzone">
