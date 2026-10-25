@@ -1,0 +1,127 @@
+{
+  "name": "filmbox",
+  "productName": "FILMBOX",
+  "version": "1.0.0",
+  "description": "Film stock and format emulation for picture and sound: Super 8 to 65 mm, characteristic curves, grain fixed to the film, halation, printing, dye fading, gate weave, dirt, splices, pulldown, magnetic and optical soundtracks and the projector in the room.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "main": "electron/main.cjs",
+  "homepage": "https://github.com/kingdrainman-debug/Filmbox",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "preview": "vite preview",
+    "electron:dev": "FILMBOX_DEV_SERVER=http://localhost:5173 electron .",
+    "electron:start": "npm run build && electron .",
+    "dist": "npm run build && electron-builder",
+    "dist:all": "npm run build && electron-builder -mwl",
+    "smoke": "node scripts/smoke.mjs",
+    "shots": "npm run build && node scripts/shots.mjs",
+    "test": "npm run typecheck && npm run build && npm run help:check && npm run smoke",
+    "help:check": "node scripts/check-help.mjs",
+    "bench": "npm run build && node scripts/bench.mjs",
+    "icon": "node scripts/make-icon.mjs",
+    "dist:win": "npm run build && electron-builder --win --x64",
+    "dist:mac": "npm run build && electron-builder --mac",
+    "dist:linux": "npm run build && electron-builder --linux",
+    "pack:win": "npm run build && electron-builder --win dir --x64",
+    "docs": "node scripts/docs.mjs"
+  },
+  "dependencies": {
+    "fflate": "^0.8.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
+    "playwright-core": "^1.49.1",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.7"
+  },
+  "optionalDependencies": {
+    "ffmpeg-static": "^5.2.0"
+  },
+  "build": {
+    "appId": "app.filmbox.desktop",
+    "productName": "FILMBOX",
+    "copyright": "Copyright © 2026 FILMBOX contributors",
+    "extraMetadata": {
+      "description": "FILMBOX film emulator"
+    },
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "build/icon.png",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "**/node_modules/ffmpeg-static/**"
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "${productName}-${version}-Setup.${ext}",
+      "requestedExecutionLevel": "asInvoker"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowElevation": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false,
+      "shortcutName": "FILMBOX",
+      "uninstallDisplayName": "FILMBOX"
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-Portable.${ext}",
+      "unicode": true
+    },
+    "mac": {
+      "icon": "build/icon.png",
+      "category": "public.app-category.video",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "linux": {
+      "icon": "build/icon.png",
+      "category": "AudioVideo",
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "synopsis": "Film stock and format emulation for picture and sound",
+      "description": "Film stock and format emulation for picture and sound: Super 8 to 65 mm, characteristic curves, grain fixed to the film, halation, printing, dye fading, gate weave, dirt, splices, pulldown, magnetic and optical soundtracks and the projector in the room."
+    }
+  },
+  "author": {
+    "name": "FILMBOX contributors"
+  }
+}
