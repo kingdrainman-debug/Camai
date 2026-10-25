@@ -1,362 +1,760 @@
-# FILMBOX — brief for a film-stock and format emulator
+# CAMAI — brief for a camcorder emulator
 
 *A prompt for a fresh Claude Code session. Paste the whole thing.*
 
-*Written by the session that built CRTBOX (this repository), so the hard-won
-parts are included rather than left to be rediscovered.*
+*Written by the session that built FILMBOX, the second in the family after
+CRTBOX, so what both builds learned the hard way is written down here instead
+of being rediscovered.*
 
 ---
 
 ## What to build
 
-**FILMBOX** — a real-time film emulator for video and stills, covering stocks
-and formats rather than televisions: Super 8, Regular 8, 16mm, Super 16, 35mm,
-65mm. Picture *and* sound. It ships as a single-click Windows application, a
-headless CLI, and a web app.
+**CAMAI** is a real-time camcorder emulator for video and stills. It covers the
+cameras ordinary people used from the mid-1990s to the late 2000s, picture
+*and* sound:
 
-It is a sibling to **CRTBOX**, which is this repository and which you should
-read before writing anything:
+- MiniDV and Digital8, with their compression blocking, interlacing and
+  early-2000s sharpness, as the core;
+- the consumer camcorder around them: the auto-everything camera, the zoom
+  rocker, and the timestamp, battery and REC overlays;
+- later, the analogue camcorders before it (Video8, Hi8, VHS-C) and the MPEG-2
+  ones after it (HDV, DVD and hard-disk camcorders).
+
+It ships as a single-click Windows application, a headless CLI and a web app.
+
+It is the third in a family. Read both of the others before writing anything:
 
 ```
-https://github.com/kingdrainman-debug/Analoguehorrorbox
+CRTBOX   https://github.com/kingdrainman-debug/Analoguehorrorbox   televisions and VHS
+FILMBOX  https://github.com/kingdrainman-debug/Filmbox             film stocks and formats
+CAMAI    https://github.com/kingdrainman-debug/Camai               this one
 ```
 
-MIT licensed, so you may fork it outright. Doing so is recommended: roughly 70%
-of what FILMBOX needs already exists there and is tested. What changes is the
-physics, the parameter schema and the presets. What stays is the whole
-apparatus around them.
+Both are MIT licensed. **Fork FILMBOX.** It is the newest and has everything
+CRTBOX had, plus the pieces a camcorder needs most:
 
-**Do not make a "film grain filter."** Grain overlays and orange LUTs are a
-solved, boring problem and there are a thousand of them. The thing worth
-building models the *chain*: light hits an emulsion, the emulsion has a
-characteristic curve, the film goes through a camera with a bad gate, gets
-developed, printed, projected or telecined, and ages badly in a cupboard. Every
-artefact should fall out of modelling a step in that chain, not out of a texture
-you multiplied on top.
+- a clock that turns output time into per-field capture times;
+- source frames tagged by capture time;
+- an event clock shared by picture and sound;
+- a probe that measures physics from pixels;
+- a Windows build that has been through Wine.
+
+From CRTBOX, take the composite and tape passes FILMBOX removed. CAMAI needs
+them for the analogue capture path and, later, for the analogue camcorders.
+
+The Camai repository holds only this file. Bring FILMBOX's history in rather
+than copying files, so the reasoning in its commit messages comes too:
+
+```
+git remote add filmbox https://github.com/kingdrainman-debug/Filmbox
+git fetch filmbox
+git merge --allow-unrelated-histories filmbox/main
+```
+
+Then move this brief to `docs/BRIEF.md`, replacing FILMBOX's.
+
+**Do not make a "camcorder filter".** A VHS overlay PNG, a blur, a REC dot and
+a date in a pixel font is a solved, boring problem with a thousand
+implementations. The thing worth building models the *chain*:
+
+1. A small cheap lens throws light onto a CCD the size of a fingernail.
+2. The CCD reads out in interlaced fields and smears where it is overloaded.
+3. An automatic camera chases exposure, focus and white balance.
+4. Its DSP sharpens every edge.
+5. A codec with a fixed bit budget crushes the result into 8×8 blocks.
+6. A tape drops out.
+7. Someone captures it over FireWire, or through a cheap analogue card, and
+   uploads it to a 2006 video site.
+
+Every artefact should come from modelling one step of that chain. None should
+be a texture laid on top.
 
 ---
 
 ## The domain
 
-Treat the following as a starting map, not as gospel — verify the numbers as you
-implement them. Film is extremely well documented and the real figures are
-findable.
+Treat this as a starting map, not as gospel. Verify the numbers as you
+implement them. Where I was unsure I have said "verify". The places to look are
+the DV standard (IEC 61834, SMPTE 314M), FFmpeg's `dvvideo` encoder and
+decoder (open source, and a reference you can run), camcorder service manuals,
+and CCD data sheets.
 
-### The emulsion
+### The camera head: lens, sensor, readout
 
-**The characteristic curve (H&D curve) is the single most important thing.**
-Density against log exposure: a *toe* where shadows compress, a long straightish
-middle, and a *shoulder* where highlights roll off. This curve, not grain, is
-why film looks like film. A highlight that would clip hard on a sensor instead
-bends gently into the shoulder and holds detail for another two or three stops.
-Model it as a real curve with controllable toe, slope (gamma), shoulder position
-and shoulder softness — and give each stock its own.
+**The sensor is tiny, and that is half the look.** Consumer camcorders used
+1/6", 1/4" and 1/3.6" CCDs; a 1/6" sensor is about 2.4 × 1.8 mm. Three things
+follow:
 
-**Negative vs reversal is a fork, not a slider.**
-- *Colour negative* has enormous highlight latitude, crushes nothing, carries an
-  orange mask, and must then be printed — so you need a second curve for the
-  print stock. The combination is what produces the look.
-- *Reversal* (Kodachrome, Ektachrome) is a positive directly, has perhaps a third
-  of the latitude, and clips highlights hard and ugly. Most Super 8 was reversal,
-  which is a large part of why Super 8 looks the way it does.
+- *Enormous depth of field.* Everything is in focus, so subject separation
+  does not exist. This is part of "the video look", and anything that adds
+  shallow focus is wrong.
+- *Poor low light, and gain.* The camera adds gain in steps up to about
+  +18 dB. Gain noise is coarse and coloured, and it is in the signal *before*
+  the codec, which matters a great deal (see below).
+- *Diffraction at small apertures* softens the image in bright sun. The camera
+  then raises the shutter speed instead: 1/250 s, 1/1000 s. Motion becomes
+  staccato and blur-free, a large part of why daylight camcorder footage looks
+  so crisp and so jittery.
 
-**Grain is not noise.** Common mistakes, all worth avoiding:
-- It is not additive. Grain is silver crystals; its visibility depends on
-  *density*. In a negative the shadows are thin and the grain shows most in the
-  midtones and shadows of the resulting positive. Model it as density-dependent.
-- It is not per-channel white noise. Each of the three emulsion layers has its
-  own grain size and the layers are not correlated. Blue-sensitive layers are
-  typically grainiest.
-- It clumps. Real grain has structure and a power spectrum, not a flat one.
-  Value noise at a couple of octaves beats white noise.
-- **It is fixed to the film plane.** Grain does not move with the subject. If the
-  gate weaves, the grain weaves *with the gate*, not with the picture. Getting
-  this wrong is the fastest way to make it look like a video filter.
-- Grain size scales with the *format*, because a smaller negative is enlarged
-  more. The same stock in Super 8 and in 35mm gives wildly different apparent
-  grain. Derive it rather than exposing it twice.
+**Single-chip vs three-chip is a fork, not a slider.**
 
-**Halation** is different from CRTBOX's. Light passes through the emulsion,
-reflects off the base, and re-exposes from behind — giving the red-orange bloom
-around highlights. It is red-dominant because the anti-halation backing absorbs
-unevenly, and stocks without that backing (early stocks, some reversal) glow
-spectacularly. CRTBOX's halation pass is a reasonable starting point but the
-tint and falloff are not the same.
+- *Single-CCD consumer cameras* mostly used a **complementary colour filter
+  mosaic** (cyan, magenta, yellow, green), read in field-summed pairs. The
+  results: low colour resolution, false colour and moiré on fine detail, and
+  muddy saturated reds.
+- *Three-CCD prosumer cameras* split the light with a prism and are far
+  cleaner in colour. This was the skate-video and indie-film camera class.
 
-### The formats
+Model the mosaic and its demosaic. Do not desaturate and call it single-chip.
 
-Format drives grain scale, resolution, aspect, frame rate and how bad the
-transport is. Get the real dimensions.
+**CCD vertical smear is the signature artefact.** On an interline-transfer
+CCD, a bright point (a streetlight, the sun, a car headlamp) leaks charge
+during readout and draws a vertical stripe the full height of the frame. It is
+an artefact *of the readout*, so:
 
-| Format | Image area (approx) | Native fps | Character |
-|---|---|---|---|
-| Regular 8 | 4.5 × 3.3 mm | 16 | Tiniest frame, enormous grain, usually silent |
-| **Super 8** | 5.79 × 4.01 mm | 18 (also 24) | Bigger gate than Reg8, plastic pressure plate, *terrible* registration |
-| 16mm | 10.26 × 7.49 mm | 24 | Documentary and news; grain present but sharp |
-| Super 16 | 12.52 × 7.41 mm | 24 | Wider, intended for blow-up |
-| 35mm Academy | 22 × 16 mm | 24 | The reference |
-| 65/70mm | 52.5 × 23 mm | 24 | Nearly grainless, enormous |
+- it is in the signal before every later stage, which sharpens and compresses
+  it;
+- its strength relative to the picture rises as the shutter gets faster
+  (verify).
 
-Super 8 deserves to be the flagship preset: 18 fps, reversal stock, heavy grain,
-a soft slow zoom lens, dreadful gate weave, and light leaks from the cartridge.
+Blooming spreads an overloaded well into its neighbours as well. **CMOS
+camcorders (from about 2006) do not smear; they have rolling shutter instead.**
+Verticals lean on a pan and propellers bend. Getting the era wrong in either
+direction is the camcorder equivalent of FILMBOX's grain moving with the
+subject.
 
-### The transport, the projector, the telecine
+**Interlaced readout.** The CCD delivers *fields*: 59.94 a second in NTSC
+countries and 50 in PAL ones, each a separate moment in time. In field
+integration mode, adjacent sensor rows are summed in pairs, and the pairing
+alternates between fields. Each field therefore has less vertical resolution
+than half a frame, and the two fields sample different row pairs (verify the
+pairing per sensor). Sixty distinct moments a second is *the* video motion,
+smooth and unmistakable, and it only exists if the field clock is real (see
+the frame clock below).
 
-This is where most of the *motion* character lives, and it is the part people
-usually skip.
+**The tone curve is the opposite of film's.** Video has perhaps five or six
+stops of usable range on these sensors. A *knee* compresses the top of the
+range, and then the signal clips hard.
 
-- **Gate weave.** The frame wanders because the registration is imprecise.
-  Super 8's plastic pressure plate is notorious. Model it as low-frequency 2D
-  translation plus a little rotation, with the grain and dirt moving with the
-  gate where appropriate.
-- **Frame-to-frame exposure flicker.** Spring-wound cameras do not hold speed,
-  and shutters vary. This is the iconic Super 8 shimmer.
-- **Projector shutter flicker** is separate: a 2- or 3-blade shutter interrupts
-  the light at 2× or 3× the frame rate.
-- **Dust and hair, in two distinct kinds.** Dirt *in the gate* is stationary in
-  the frame and persists for many frames, and hairs at the gate edge wiggle.
-  Dirt *on the film* appears for one frame and is gone. Both exist; they look
-  completely different; most emulations only do the second.
-- **Scratches / tramlines.** Vertical lines that persist across a shot because a
-  piece of grit is in the gate. Base-side scratches read bright, emulsion-side
-  scratches read dark or coloured. They should last seconds, not frames.
-- **Splices**: a jump plus a flash frame. **Cue marks**: the circle in the top
-  right corner at reel changes.
-- **Focus breathing** as the film buckles in the gate from lamp heat.
-- **3:2 pulldown** if telecined to 29.97, which produces the characteristic
-  judder — a real and very recognisable artefact.
+- On a single-chip camera the channels clip at different points, so a
+  blown-out sky goes cyan or yellow at its edge before it goes white.
+- FILMBOX's shoulder is a gentle roll-off; this is a short knee and a wall.
+- DV's coding range has headroom above reference white, and consumer cameras
+  used it: superwhites up to about 109 IRE (verify). Whether the capture or
+  display path clips them is a separate, later decision, not the camera's.
 
-### Age and damage
+**The lens** is a small, slow 10× to 25× zoom: soft in the corners, flaring
+easily, with visible chromatic aberration at the long end. The
+**wide-angle and fisheye adapters** screwed onto the front deserve their own
+treatment: heavy barrel distortion, a soft rim and a hard vignette. The fisheye
+on a three-chip DV camera *is* the skate-video look.
 
-- **Dye fading.** The cyan dye in Eastman colour stocks fades fastest, which is
-  why so many 1970s and 80s prints are now pink-magenta. This is a specific,
-  recognisable, per-dye decay, not a generic desaturation.
-- **Vinegar syndrome**: acetate decay, buckling, channelling.
-- **Light leaks and edge fog**, especially at the start and end of a cartridge.
-  Super 8 cartridges leaked constantly.
-- **Mould, water marks, emulsion lifting.**
+### The camera's automatics: where "consumer" lives
 
-### The lens
+Professional video is defined by its controls and consumer video by their
+absence. The automatics are the character.
 
-Super 8 cameras had small, slow zooms: soft corners, low contrast, veiling
-flare, visible chromatic aberration. 35mm anamorphic is a different world —
-oval bokeh, horizontal blue flares, focus breathing. Worth a section of its own.
+- **Auto exposure** steers iris, gain and shutter together, with lag. Walk
+  from a room into daylight and the picture blows out, then pumps down over
+  a second or so. It hunts on flickering light, and backlight compensation
+  over-corrects.
+- **Auto white balance** drifts slowly and is wrong in recognisable ways:
+  orange under tungsten, green under fluorescent tubes. It shifts visibly when
+  a coloured object fills the frame.
+- **Autofocus** was contrast-detection. It hunts, breathing in and out, when
+  the subject changes or the light falls, and it locks on the background
+  behind a near subject.
+- **Electronic image stabilisation** reads out a crop of the sensor and moves
+  the crop to cancel shake. That gives a smaller field of view and a little
+  less resolution. Most tellingly, the frame stays steady while the motion
+  blur in it does not, because blur cannot be stabilised after the fact.
+- **Digital zoom** goes past the optical range ("500×!") by enlarging a
+  shrinking crop of the sensor. The upscale is coarse, so the picture turns
+  to blocks with a magnification readout on the display.
+- **Slow shutter and night modes.** 1/30 s or 1/15 s repeats fields and
+  smears motion into stuttering trails. **Infrared night modes** removed the
+  IR-cut filter and lit the scene with an IR LED. The result is near
+  monochrome with a green cast, a hot spot in the middle of the frame, glowing
+  eyes, and fabrics that turn translucent in IR. Found-footage horror lives in
+  this mode; do it well. Describe it generically: the names were trademarks.
+- **Detail enhancement ("aperture correction")** is the early-2000s sharpness,
+  and it deserves the care FILMBOX gave the characteristic curve. The camera
+  boosts edges horizontally and vertically with a peaking filter:
+  - every edge gets an overshoot halo, a bright fringe on the light side and
+    a dark one on the dark side;
+  - a *coring* threshold leaves low-level noise unboosted;
+  - vertical enhancement works across lines, so it interacts with
+    interlacing.
 
-### Sound — do not treat this as an afterthought
+  It happens *before* the codec, and halos are expensive to code, so the
+  codec then rings around them. Model it as a filter with gain, frequency,
+  coring and limiting, not as an unsharp mask turned to 11.
+- **In-camera digital effects**: the fader (fade from black or white at REC
+  start), sepia, black and white, "old movie", mosaic, strobe, trail. Small,
+  well known and cheap. Ship them inert.
 
-CRTBOX's single best decision was taking audio as seriously as picture, and the
-film equivalents are at least as rich:
+### The operator
 
-- **Super 8 magnetic stripe**: a very narrow stripe of oxide, so limited
-  bandwidth, audible hiss, and wow/flutter from a tiny capstan. Print-through
-  (a pre-echo from adjacent windings) is a lovely, rarely emulated detail.
-- **16mm/35mm optical track**: variable-area or variable-density. Dirt on the
-  track becomes crackle, scratches become ticks, and the distortion character is
-  specific and unlike magnetic tape.
-- **The Academy curve**: the deliberate high-frequency rolloff that cinema
-  playback applied for decades.
-- **Projector noise.** The mechanical clatter of the mechanism in the room, at
-  the frame rate and its harmonics. This is the direct analogue of CRTBOX's
-  flyback whine, which turned out to be the single most evocative sound in the
-  whole application. Do this one well.
+A camcorder is handheld by someone who is not a camera operator. Model the
+person as a section of their own:
+
+- hand tremor with a real tremor spectrum;
+- the walking bob;
+- shake magnified by the zoom;
+- the slow zoom in on the birthday cake;
+- the whip pan;
+- the handling bump when a hand shifts its grip.
+
+The zoom position should be an ordinary animatable parameter. The timeline
+then drives it, and the audio reads its velocity (see the A/V link).
+
+### The codec: DV
+
+DV is intra-frame DCT compression at a constant 25 Mbit/s for video, about
+5:1. Constant matters most: **the bit budget is fixed, so quality is whatever
+is left after the picture has paid for its detail.**
+
+| | NTSC (525/60) | PAL (625/50) |
+|---|---|---|
+| Raster | 720 × 480 | 720 × 576 |
+| Rate | 29.97 frames, 59.94 fields | 25 frames, 50 fields |
+| Chroma | **4:1:1**, a quarter of horizontal colour resolution | **4:2:0**, half horizontal and half vertical |
+| Pixel aspect, 4:3 | 10:11 | 12:11 (verify both against 704-wide active) |
+| Field order | bottom field first | bottom field first |
+
+How it works (verify each step against the standard and FFmpeg's `dvenc.c`):
+
+- The frame is split into 8×8 DCT blocks. A *macroblock* is four luma blocks
+  plus one Cb and one Cr: 32×8 luma pixels in 4:1:1, 16×16 in 4:2:0.
+- **Five macroblocks make a video segment.** They are *shuffled* from five
+  separate places across the frame, and each segment must fit a fixed number
+  of bytes. A detailed area therefore takes bits from four unrelated places
+  elsewhere in the picture. This is why DV quality is fairly even across the
+  frame, and why it gets worse everywhere at once when the frame is busy.
+- Each block chooses between an 8-8 DCT and a **2-4-8 DCT**. The 2-4-8 form
+  handles a block whose two fields differ (interlaced motion) by coding their
+  sum and difference separately.
+- Each block is put in one of four classes by its activity. Each macroblock
+  gets a quantisation number chosen so its segment fits. Higher frequencies
+  are quantised more coarsely, by area.
+
+What that produces, and what to model:
+
+- **Blocking**: 8×8 boundaries in flat gradients, most visible in skies and
+  skin at the edge of the budget.
+- **Mosquito noise**: ringing around high-contrast edges, especially the
+  sharpened ones.
+- **Chroma bleed**, worst in NTSC 4:1:1: red text and red edges smear four
+  pixels sideways. PAL 4:2:0 instead smears colour vertically, across fields
+  (verify the chroma siting).
+- **The low-light collapse**: gain noise is detail as far as the codec is
+  concerned, so a dark gained-up room blocks far worse than a bright one.
+  This is a causal link, not a coincidence. It must come out of the model:
+  noise in, coarser quantisation out.
+
+**Model the codec rather than imitating it.** A real 8×8 DCT, quantisation
+and inverse DCT run comfortably in fragment shaders. The hard part on a GPU is
+rate control, because choosing a quantiser per macroblock needs to know the
+segment's total cost. A workable plan:
+
+1. One pass computes the DCT coefficients.
+2. A second estimates, for each macroblock, the bit cost at each quantisation
+   number from its coefficients.
+3. A third picks the finest quantiser at which each segment of five fits.
+4. A fourth quantises and inverts.
+
+An approximate cost model is acceptable if it is calibrated against the real
+encoder and the README says it is approximate.
+
+**You have a luxury FILMBOX never had: the real thing to compare against.**
+FFmpeg's `dvvideo` encoder is bundled with the app already, through
+`ffmpeg-static`. Encode the same pre-codec frame with it, decode it, and
+compare. Use that in the smoke test (below). Also offer **a real DV file as an
+export format**: 720×480 or 720×576, `dvvideo`, interlaced, bottom field
+first, PCM audio. Editors can then cut the output as DV, and the codec in the
+file is the codec in the file.
+
+### The tape
+
+- **MiniDV tape** runs at 18.81 mm/s in SP and 12.56 mm/s in LP. LP has
+  narrower tracks and more errors, and plays back badly on other decks. The
+  head drum turns at 9000 rpm, laying 10 tracks per frame in NTSC and 12 in
+  PAL (verify all four figures).
+- **Dropouts are digital, not analogue.** A damaged track loses DIF blocks,
+  and the decoder *conceals* the loss by substituting macroblocks, usually
+  from the previous frame. So a DV dropout is:
+  - rectangles of the frame frozen or misplaced on the block grid;
+  - sometimes grey or green blocks;
+  - at worst, a whole frozen frame with the audio muted.
+
+  It is never a horizontal streak; that is VHS, which is CRTBOX's.
+- **Head clog** freezes or mosaics the whole picture until the heads clean
+  themselves.
+- **Recording breaks.** Each press of REC starts a new shot. A DV camera backs
+  the tape up slightly before recording so cuts are seamless: a hard cut with
+  continuous timecode. Recording over an unrecorded gap breaks the timecode.
+- **Digital8** is the same DV stream on Hi8 tape, and behaves the same once
+  decoded.
+
+### The display: overlays have a path, and the path is the point
+
+This is the section the user asked about by name, and it has the structural
+idea that FILMBOX's gate dirt and film dirt had. **Overlays are not one thing.
+Where an overlay enters the chain decides what the chain does to it.**
+
+1. **The viewfinder and LCD display.**
+   - What it shows:
+     - REC or STBY, often with a red dot;
+     - the tape counter or the minutes remaining;
+     - the battery icon with its bars or minutes;
+     - the zoom bar running W to T, and the digital zoom readout;
+     - SP or LP, 12-bit or 16-bit, 16:9;
+     - focus and exposure icons;
+     - warnings, blinking.
+   - **None of it is ever recorded to DV tape.** It appears only on the
+     camera's screen, and on its AV output when the display-output setting is
+     on.
+   - Footage "with the REC overlay" is therefore one of three things:
+     - the AV output recorded or captured with the display on;
+     - a screen filmed by another camera;
+     - a later imitation, the found-footage convention.
+
+   Default to the AV-output path and label it honestly.
+2. **Date imprint, burned in.** Many analogue camcorders (8mm, Hi8, VHS-C) had
+   a character generator that mixed the date and time into the picture
+   *before* recording. It went to tape with everything else, so it carries
+   the tape's softness and chroma smear. On DV cameras, burned-in text was
+   mostly the title-superimpose feature (verify which models imprinted the
+   date).
+3. **Data code at playback.** DV records the date, time and camera settings
+   (shutter, aperture, gain, white balance) as metadata in the subcode. The
+   camera or deck draws them over the *decoded* picture when the data-code
+   display is on. That drawing is crisp, on top of the blocks rather than
+   under them. If that playback is then dubbed or captured through analogue,
+   the overlay is softened along with the picture.
+
+So the overlay layer needs an *insertion point*:
+
+- **before the codec**: it gets DCT ringing around every glyph edge, and
+  coloured text bleeds sideways in 4:1:1;
+- **after decode**: clean edges over blocky picture;
+- **on the display**: sharp, on the display's own pixel grid.
+
+Each then passes through whatever follows. A test can tell them apart (below),
+and so can a viewer, even one who could not tell you why.
+
+**The overlay clocks are a model, not a string.**
+
+- **The date and time** is wall-clock time. It advances in real time while
+  recording and *jumps* at every recording break, because time passed between
+  shots. A camera whose clock was never set shows its factory default or a
+  blank (verify per maker); that is a good preset.
+- **The tape counter or timecode** is tape position. It runs continuously
+  across breaks, because the tape is continuous.
+- **The battery** drains over the session, blinks when low, and at the end
+  the camera stops recording. That is a cut, not a fade.
+- Date formats were regional: `JAN 15 2003`, `15.1.2003`, `2003 1 15`, with
+  `12:34:56 PM` or 24-hour time. Provide all three.
+
+**The OSD font.** These were character-generator bitmap fonts:
+
+- small cells at a lower pixel clock than the video, so glyph pixels are wide;
+- white or yellow, with a black edge or drop shadow so they read on any
+  picture;
+- placed in fixed safe-area positions.
+
+**Draw an original font in that style.** Do not lift glyphs, layouts or logos
+from any manufacturer's firmware, manual or screen. The same goes for format
+logos. Presets describe the object, not the brand: "a single-chip MiniDV
+palmcorder, 2002", not a model number.
+
+### Delivery: how it reached the screen
+
+How the footage was watched is a stage of its own, and most "camcorder
+looks" are really this stage. It ships inert like everything else.
+
+- **FireWire capture** is bit-exact: identity.
+- **Analogue capture** goes through S-Video or composite into a capture card or
+  a DVD recorder. This is where CRTBOX's composite chain comes in: dot crawl,
+  chroma delay, a softer picture, and everything on top of it, overlays
+  included, degraded together.
+- **Deinterlacing**, chosen by whatever played or converted it:
+  - *weave* keeps both fields and shows combing ("mice teeth") on motion;
+  - *bob* doubles each field and makes thin lines twitter;
+  - *blend* ghosts;
+  - *discard one field* halves vertical resolution, which is the early
+    web-video look.
+
+  A CRT shows fields in sequence and is smooth. Hand that case to CRTBOX
+  rather than re-implementing it.
+- **Scaling** from the SD raster to a modern screen, honouring the pixel
+  aspect. Nearest, bilinear and good resampling look very different at 1080p.
+- **The 2006 upload**: 320×240, one field discarded, a second lossy codec on
+  top of DV's, 15 fps or so. This is FILMBOX's print generations translated:
+  a found tape, captured badly, re-encoded, is a chain of generations.
+
+### Sound: do not treat this as an afterthought
+
+CRTBOX's flyback whine and FILMBOX's projector clatter were the two most
+evocative sounds in their apps. The camcorder's equivalents are the zoom motor
+and the automatic gain control.
+
+- **DV audio**: 48 kHz 16-bit stereo, or **32 kHz 12-bit with four
+  channels**, using a non-linear 12-bit encoding (verify the companding curve
+  in IEC 61834). Many consumer cameras shipped set to 12-bit, so a great deal
+  of real footage is band-limited to about 15 kHz with a specific
+  quantisation texture.
+- **The built-in microphone sits on the camera body.** It hears:
+  - the tape transport's whine, the head drum and capstan, at a frequency
+    locked to the frame rate;
+  - the **zoom motor** whirring whenever the rocker is pressed;
+  - autofocus motor ticks;
+  - fingers on the body;
+  - the REC button's clunk at the start of a shot;
+  - wind, and the wind-cut filter's thinning when it is on.
+- **Automatic gain control** pumps: loud sounds duck everything, and in quiet
+  passages the noise floor and room tone *rise* (breathing). Model it with
+  attack, release and a maximum gain, not as compression.
+- **Dropouts mute or repeat a short block of audio** at the same moment the
+  picture conceals. Recording breaks cut the audio dead, with a click.
+- **The camera always has audio.** Even when the source is silent, the camera
+  hears its own transport. FILMBOX had to add a silent fallback for clips
+  without an audio track. In CAMAI that fallback is not silent: it is the
+  camera.
 
 ### Link picture and sound
 
-CRTBOX's "A/V Link" section ties the two halves together and is the thing that
-makes it feel like one object rather than two effects. Carry the idea over with
-film's own couplings:
+The A/V Link section is what makes each app one object rather than two
+effects. Carry it over with the camcorder's own couplings, and only physical
+ones; do not invent a link that the real machine did not have.
 
-- Projector clatter locked to the frame rate *and* to gate weave, so the picture
-  judder and the mechanical noise are the same event.
-- A splice gives a picture jump **and** an audio pop.
-- Optical-track dirt and picture dirt come from the same dirty print.
-- Lamp flicker and the amplifier's supply, as in CRTBOX.
+- **The zoom**: one parameter drives the picture's field of view, the shake
+  magnification and the EIS margin. Its *velocity* drives the zoom motor's
+  whine. The timeline animates the first, and the second follows.
+- **Autofocus hunting** in the picture is the focus motor ticking in the
+  audio: the same events.
+- **A recording break** is three things at once: the cut, the REC-button
+  clunk and audio cut, and the overlay clock's jump.
+- **A tape dropout** conceals picture blocks and mutes audio at the same
+  moment, from the same damaged track.
+- **A handling bump** is a shake impulse and a thump.
+- **The transport whine** is locked to the frame rate, as the projector was
+  in FILMBOX.
 
 ---
 
-## Architecture to reuse from CRTBOX
+## Architecture to reuse
 
-Read these before designing anything. They are the parts that took longest to
-get right.
+Most of this exists already in FILMBOX and is tested. Read it before
+designing anything.
 
-**`src/core/params.ts` — a schema-driven everything.** One file describes ~260
-parameters (key, label, type, range, default, unit, hint, advanced flag,
-group, group kind). From it are generated: the entire settings UI, the shader
-uniforms, the preset format, the CLI flags, the randomiser and the keyframe
-system. Adding a parameter is one entry and it is immediately animatable,
-savable, CLI-addressable and randomisable. **Keep this.** It is the reason the
-app grew to 260 parameters without the UI code growing at all.
+**`src/core/params.ts`, schema-driven everything.** Each parameter is one
+entry: key, label, type, range, default, unit, hint, advanced flag, group and
+group kind. The settings UI, uniforms, presets, CLI flags, randomiser and
+keyframes are all generated from it. FILMBOX has 197 parameters and CRTBOX
+about 260, and neither app's UI code grew with them. **Keep this.**
 
-**Two render backends behind one interface.** `src/video/backend.ts` picks
-between a WebGL2 renderer and a pure-JavaScript CPU renderer, with Auto falling
-back rather than failing. The CPU path exists for machines where WebGL2 is
-missing or blocked, for headless batch rendering, and for bit-identical
-deterministic output. The smoke test asserts the two agree. Worth carrying over;
-it is about 2,300 lines and already written.
+**Engine masters folded into section switches.** FILMBOX has Stock, Lens and
+Gate masters. `applyEngineMasters` folds them into the individual section
+switches before either renderer sees them, so the two backends cannot
+disagree. CAMAI's natural split:
 
-**`src/core/help.ts` + `scripts/check-help.mjs`.** Every parameter and every
-section has a written explanation surfaced by an ⓘ disclosure, and the build
-*fails* if a parameter exists without one or if the text is too short to be
-saying anything. This is why the app is navigable at 260 parameters. Keep the
-enforcement, not just the convention — it caught four stubs that would otherwise
-have shipped.
+- **Camera**: operator, lens, sensor, automatics, DSP;
+- **Tape**: chroma subsampling, interlace, codec, tape errors;
+- **Display**: overlays, delivery, deinterlacing, scaling.
 
-**The guide.** A startup overlay with three or four tabs answering what someone
-needs in the first minute, closeable, reopenable with F1, with a remembered
-"don't show again". Not a manual.
+Decide which section owns anything shared before naming the masters (see
+lesson 24).
 
-**The keyframe timeline.** `src/core/timeline.ts` plus `src/ui/Timeline.tsx`:
-every parameter animatable, numbers interpolate, enums and switches hold
-(because there is no value half way between two film stocks). Easing per
-keyframe including a hard hold. For film this matters most for damage events —
-ramp a splice or a light leak in over three frames and out again.
+**The frame clock, `src/film/clock.ts`.** It turns output time into film
+frames, a capture time for each *field*, and events. It already handles two
+fields per output frame drawn from different source moments, because 3:2
+pulldown needed exactly that. Interlace is the same machinery at a different
+cadence: two fields per frame, each its own capture time, bottom first. Read
+it closely; it is most of what the interlace engine needs.
 
-**Engine master switches.** CRTBOX has two engines (Tape, Tube) each with a
-master bypass that folds down into its sections' individual bypasses. FILMBOX
-has the same natural split — **Stock** (emulsion, curve, grain, dyes) and
-**Gate** (transport, projector, damage, telecine) — plus a lens section. Fold
-masters into section bypasses rather than teaching the renderers about them, so
-both backends cannot disagree.
+**Source slots tagged by capture time, `src/video/sources.ts`.** The renderer
+holds decoded source frames tagged by the moment they show and evicts the one
+furthest from the newest. Exports seek the decoder to each field's exact
+capture time (`prepareFrames` in `App.tsx`).
 
-**`scripts/smoke.mjs`.** Fourteen stages driving the real UI in a real browser.
-Discussed below; it is the most valuable file in the project.
+**The shared event clock, `public/worklets/film-events.js`.** This is a plain
+JavaScript module imported both by the TypeScript renderer and by the
+AudioWorklet. Splices, flicker and weave are computed once from integer
+hashes, so picture and sound agree exactly. Recording breaks, dropouts,
+bumps, AF hunts and battery events belong in the CAMAI equivalent.
 
-**Packaging.** Electron + electron-builder, NSIS one-click plus portable, a
-GitHub Actions workflow that builds on a Windows runner and can cut a release
-and create the tag itself. Lift it wholesale.
+**Two render backends behind one interface, `src/video/backend.ts`.** WebGL2,
+plus a pure-JavaScript CPU renderer that mirrors every pass and is checked
+against it. The DCT and the rate control must exist in both. They are
+deterministic integer-friendly maths, which makes agreement achievable.
+
+**Native-raster rendering.** Render the camera into the DV raster (720×480
+or 720×576), run the codec and the tape at that raster, and only then scale to
+the output frame with the right pixel aspect. FILMBOX learned the same rule as
+"physical units": artefacts are sized in the medium, not on the screen. An
+8×8 block is 8×8 in the DV raster and about 18×18 on a 1080p output.
+
+**One output-shape function, `src/core/output.ts`.** `frameAspect` and
+`outputSize` are used by both the preview and the export. The rendered frame
+is always the shape of the picture, with no bars baked in. Camcorder footage
+adds 4:3, cropped-and-stretched 16:9 (most consumer cameras made 16:9 by
+cropping a 4:3 sensor), and pixel aspect ratio.
+
+**`src/core/help.ts` and `scripts/check-help.mjs`.**
+- Every parameter, section and preset has written help.
+- The build fails if any is missing or too short to be saying anything.
+- In FILMBOX the same check also validates the presets against the schema and
+  confirms the generated `docs/PRESETS.md` is current (`scripts/docs.mjs`).
+
+**The probe, `src/testing/probe.ts`.** `window.__filmbox.renderProbe` renders
+synthetic sources through the real renderer, of either kind, at chosen output
+frames, and returns pixels. It was the most useful tool in the FILMBOX build.
+Every physics claim was proven with it. CAMAI's synthetic sources:
+
+- a point light (smear);
+- a zone plate (moiré, sharpening, aliasing);
+- an edge (overshoot halos);
+- red text (chroma bleed);
+- a moving bar (field order and combing);
+- a noise patch (bit starvation);
+- a field counter (which source moment each field shows);
+- the drawn outdoor scene (`drawScene`), plus an interior under tungsten light.
+
+**The rest:**
+- **The keyframe timeline** (`src/core/timeline.ts`, `src/ui/Timeline.tsx`).
+  Numbers interpolate and enums hold. The zoom lives here.
+- **The startup guide**, reopened with F1.
+- **`scripts/shots.mjs`**: every preset rendered over the test scene.
+- **`scripts/bench.mjs`**: both backends, with the honest note that a
+  container has no GPU.
+- **Packaging**: Electron and electron-builder, NSIS one-click plus a portable
+  exe, `.github/workflows/ci.yml`, and `.github/workflows/windows.yml`, which
+  builds on a Windows runner on a `v*` tag.
+- **The README's "Honest notes"** section.
 
 ---
 
 ## Lessons already paid for
 
-These cost real time in the CRTBOX build. Do not re-learn them.
+From CRTBOX:
 
-1. **`texSubImage2D` from a `<video>` silently writes nothing.** The call
-   succeeds, `glGetError` is clean, and the texture keeps its previous contents
-   — so video renders black forever while `<img>` works fine. Use `texImage2D`
-   unconditionally.
+1. **`texSubImage2D` from a `<video>` silently writes nothing.** The texture
+   keeps its old contents and `glGetError` is clean. Use `texImage2D`.
+2. **Hand-rolled path-to-URL conversion breaks on Windows** (`C:` becomes
+   `C%3A`). Use `pathToFileURL`, or better, read the bytes into a blob URL.
+3. **Seeking resets things you did not mean to reset.** Exporting is seeking,
+   frame by frame. CAMAI's accumulators need the same care: AE, AWB and AF
+   state, AGC envelope, EIS position, slow-shutter field memory and dropout
+   concealment's previous frame.
+4. **The export frame must be the shape you asked for.** One shared function,
+   or 4:3 comes out 16:9 with bars baked in.
+5. **`gl_FragCoord` is the pixel centre, origin bottom-left.** A CPU mirror
+   using integer top-left indices is half a pixel out in x and flipped in y.
+   For a block codec this is fatal: the 8×8 grid must start on the same pixel
+   in both backends.
+6. **A parameter can exist in the schema and never reach the shader.** Test
+   that each section changes the picture.
+7. **Fixed `sleep()` in a browser test is a flaky test.** Poll for the
+   condition.
+8. **`pkill -f "scripts/smoke.mjs"` matches its own shell.**
 
-2. **Hand-rolled path→URL conversion breaks on Windows.** Splitting a path and
-   running `encodeURIComponent` over each segment turns `C:` into `C%3A`, which
-   Chromium will not resolve, so the file dialog silently loads nothing — on the
-   only platform the app ships to, while working perfectly on Linux and in CI.
-   Use `node:url`'s `pathToFileURL`. Better still, read the bytes and use a blob
-   URL so playback never depends on a file URL at all.
+From FILMBOX:
 
-3. **Seeking resets things you did not mean to reset.** CRTBOX cleared its
-   phosphor-persistence buffers on the `seeking` event, which is correct when a
-   user scrubs and catastrophic during an export — frame-stepping *is* seeking,
-   so trails were wiped before every single frame and no rendered video ever had
-   them. Any frame-to-frame accumulator (and film has several: gate dirt,
-   scratches, print-through) needs the same care.
+9. **Evict cached source frames by distance, not by age.** With least recently
+   used eviction, a pulldown frame that needed two film frames lost the older
+   one and showed a stale field. Interlace needs two capture moments per frame
+   all the time. Tag source frames by capture time and evict the one furthest
+   from the frame being built.
+10. **Size artefacts in the medium, not as a fraction of the screen.** Gate
+    dirt specified as screen fractions came out sub-pixel at some outputs and
+    huge at others. DCT blocks, chroma cells, OSD glyphs, smear width, noise
+    grain: all in sensor or DV-raster units, converted once.
+11. **Apply effects in the order the real chain does.** Dirt added before dye
+    fading came out the wrong colour. The camcorder's order is not negotiable:
+    1. gain noise before sharpening;
+    2. sharpening before the codec;
+    3. imprinted text before the codec, playback text after decode;
+    4. concealment after decode;
+    5. analogue capture after all of it.
+12. **A single event can fool a statistic.** Grain σ was inflated by one dust
+    speck until the measure became a median of neighbour differences. Measure
+    blocking as a ratio of gradients at block boundaries to gradients inside
+    blocks, robustly, or a scene edge on the grid will read as blocking.
+13. **Do not run screenshots or benchmarks alongside the smoke test.**
+    Contention made timing-sensitive stages fail for reasons unrelated to the
+    thing under test.
+14. **The live app must not re-render when nothing changed.** An open page
+    re-rendering constantly starved the test page. Skip unchanged frames.
+15. **Every export has a soundtrack.** A clip without an audio track exported
+    without one until an offline fallback was added. For CAMAI the fallback is
+    the camera's own transport and room, as above.
+16. **Hash with integers when two runtimes must agree.** The event clock uses
+    `Math.imul`, so the AudioWorklet and the renderer compute identical events.
+    Floating-point hashes drift between GLSL and JavaScript.
+17. **"Off" must be exactly off.** FILMBOX's telecine black point applied even
+    with the telecine disabled until it was gated. A purity stage asserts that
+    with every section off, output equals input. Keep it, and expect it to
+    catch something.
+18. **The schema clamps silently, so a test can measure something it did not
+    ask for.** An overscan of −0.3 was clamped to −0.2 and the test measured
+    the clamped value. Presets report out-of-range values (`PRESET_PROBLEMS`);
+    make the probe do the same.
+19. **Know where your tools write before you read their output.** A screenshot
+    run wrote to the repository root and stale images were misread as current.
+20. **The decoder's `<video>` element can show beside the canvas.** FILMBOX
+    covers it (`.stage-cover`).
+21. **Windows' Task Manager shows an executable's FileDescription as its
+    name**, and electron-builder fills it from the package description. Keep
+    the packaged description short (`extraMetadata.description`).
+22. **Building the Windows installer from Linux works under Wine**, with care:
+    - Wine needs 32-bit support, because the NSIS step runs the installer it
+      has just built.
+    - `ffmpeg-static` must hold the Windows binary
+      (`npm_config_platform=win32`), not the Linux one, because the whole
+      package is bundled.
+    - Chromium's renderer does not start under Wine, so a Windows build cannot
+      render there. Install, uninstall, shortcuts, version resource and the
+      main process can be checked; rendering cannot.
 
-4. **The export frame must be the shape you asked for.** CRTBOX derived export
-   dimensions from the source and let the shader letterbox inside it, so
-   choosing 4:3 produced a 16:9 file with bars baked in. Compute the output
-   frame from the *format's* aspect, in one shared function used by both the
-   preview canvas and the export. Film has strong opinions about aspect —
-   1.33, 1.37 Academy, 1.66, 1.85, 2.39 — so this matters more here.
-
-5. **`gl_FragCoord` is the pixel centre, origin bottom-left.** When writing a
-   CPU renderer to match a GPU one, passing integer top-left indices puts every
-   screen-space pattern half a pixel out in x and half a pixel plus a flip out
-   in y. On a 3-pixel pattern that is a sixth of a cycle and plainly visible.
-   This caused an 18-unit brightness difference that took a bisect to find.
-
-6. **A parameter can exist in the schema and never reach the shader.** The
-   control moves, the uniform is never set, nothing happens, and nothing fails.
-   Assert in a test that each new section actually changes the picture.
-
-7. **Fixed `sleep()` in a browser test is a flaky test.** Several stages
-   intermittently sampled a frame before it was drawn, which reads as
-   "perfectly flat" and fails for reasons unrelated to the thing under test.
-   Poll for the condition, or wait until two consecutive samples agree.
-
-8. **`pkill -f "scripts/smoke.mjs"` matches its own shell** and kills the
-   command running it. Mildly funny, cost ten minutes.
+    Say so. The Windows workflow on a real runner is the proper build.
+23. **A probe that measures a sensible-looking wrong thing is worse than no
+    probe.** FILMBOX's latitude test first measured display clipping rather
+    than film clipping, because the transfer's white point clipped first. When
+    a result agrees with the hypothesis suspiciously well, check what else
+    could produce it.
+24. **A master switch must cover exactly what its name says.** FILMBOX's Lens
+    master also switched off Exposure: its help text said so, its name did
+    not. A test that turned the lens off then got a different exposure and
+    measured the wrong thing. Put shared controls where their name belongs.
 
 ---
 
 ## How to test this
 
-CRTBOX's smoke test is a Playwright script driving the real UI and asserting
-*emergent behaviour*, not pixel equality. That distinction is what makes it
-useful. Examples worth copying in spirit:
+Keep FILMBOX's smoke test structure: a Playwright script driving the real UI
+and the real renderers, asserting *emergent behaviour* rather than pixel
+equality, and loading over `file://` as the packaged build does. FILMBOX's
+fourteen stages carry over: mount, picture, video, audio, keyframes,
+framing, purity, packaged, sections, guide, physics, cpu, masters and export.
+Its physics stage is the template.
 
-- Shaders compile and link (type-checking cannot catch a broken shader).
-- A test pattern comes out lit, with contrast, and with the expected structure.
-- A video fixture actually reaches the renderer.
-- The app loads over `file://` — the packaged build uses `loadFile`, and
-  testing only over HTTP is exactly how a `file://`-only defect shipped.
-- Keyframes measurably animate the output and the midpoint eases rather than
-  steps.
-- Both render backends produce the same picture within tolerance.
+Camcorder artefacts are at least as measurable as film's, and this time there
+is a real codec to compare against:
 
-For FILMBOX the equivalents are better still, because film artefacts are
-measurable:
-
-- **The characteristic curve**: feed a synthetic exposure ramp and assert the
-  measured output has a toe and a shoulder — that the slope near black and near
-  white is lower than the slope in the middle. That is the curve existing,
-  proven from the output.
-- **Grain is fixed to the gate, not the subject**: pan the source and assert the
-  grain pattern does *not* track it; weave the gate and assert it does.
-- **Grain scales with format**: the same stock at Super 8 and 35mm must differ
-  measurably in grain power.
-- **Negative vs reversal latitude**: push a highlight ramp and assert reversal
-  clips sooner and harder than negative.
-- **Gate dirt persists, film dirt does not**: assert a gate speck survives N
-  frames and a film speck does not.
-- **Cyan-dye fading is per-dye**: assert faded output shifts toward magenta
-  specifically, rather than just desaturating.
-- **3:2 pulldown**: assert the judder pattern is 3:2 and not uniform.
-
-Also keep `scripts/check-help.mjs` (build fails on undocumented parameters) and
-`scripts/bench.mjs` (both backends, with an honest note that a container has no
-GPU so the numbers are a floor).
+- **The field clock.** Render a moving bar from a 60p source. Assert that the
+  even and odd lines of one output frame show the bar at two positions one
+  field apart, and that the bottom field is the earlier one for DV.
+- **Deinterlacing.** Weave shows combing on motion and none on a still
+  frame. Bob shows none. Discard halves vertical resolution.
+- **DCT blocking.** Boundary-to-interior gradient ratio above 1 at multiples
+  of 8 in the DV raster, a period in the output of 8 × the scale, and a ratio
+  of 1 with the codec off.
+- **The constant bit budget.** The same scene with gain noise added shows
+  coarser quantisation everywhere, including in areas the noise barely
+  touched. That is the shared budget, proven from the output.
+- **Against the real codec.** Encode the same pre-codec frame with FFmpeg's
+  `dvvideo`, decode it, and assert that the emulation's blocking ratio and
+  high-frequency loss fall within a stated tolerance of the real thing.
+  Report the numbers either way.
+- **Chroma subsampling.** A thin red vertical line spreads about four luma
+  pixels sideways in NTSC 4:1:1 and about two in PAL 4:2:0, and in PAL also
+  vertically.
+- **Detail enhancement.** An edge overshoots: the output exceeds both
+  plateaus beside it. With coring on, low-level noise is not amplified.
+- **Smear vs rolling shutter.** A point light gives a vertical column of
+  roughly constant brightness down the frame on a CCD preset, and none on a
+  CMOS one. A fast pan skews verticals on CMOS and not on CCD.
+- **Knee and clip.** A ramp shows a straight segment, a knee and a hard
+  clip. On a single-chip preset the channels clip at different exposures.
+- **Overlay insertion point.** Red text imprinted before the codec shows
+  sideways chroma spread and ringing around its glyphs. The same text added
+  after decode has neither. Both soften under analogue capture.
+- **The overlay clocks.** The timestamp advances in real time. At a
+  recording break the wall clock jumps and the tape counter does not.
+- **Dropouts.** A dropout region equals the previous frame exactly, on the
+  macroblock grid, and the audio is muted for the same span.
+- **The A/V link.** Zoom keyframes produce motor whine energy only while the
+  zoom moves. A recording break produces a cut, a click and a clock jump at
+  the same output frame.
+- **Audio.** 12-bit mode measurably band-limits near 16 kHz (the 32 kHz
+  Nyquist limit). AGC raises the noise floor in a quiet passage.
+- **Purity, both backends, masters and export**, as in FILMBOX. The export
+  stage should also check that a DV export is genuinely DV: `ffprobe` reports
+  `dvvideo`, the raster, and bottom-field-first.
 
 ---
 
 ## Working practices that mattered
 
-- **Measure, do not assume.** Several confident diagnoses in the CRTBOX build
-  were wrong, and the bisect or the probe found the real cause in minutes. When
-  a measurement looks surprising, suspect the measurement first: a dot-crawl
-  test showed "no movement" purely because the probe downsampled a 227-cycle
-  pattern into nothing.
-- **Say what you did not verify.** One fix in CRTBOX — the Windows path bug —
-  could only be reasoned about, never executed, because the container is Linux.
-  That was stated plainly in the commit and in every summary afterwards. Do the
-  same rather than implying everything was proven.
-- **New sections ship inert.** When CRTBOX gained Colour and Glitching sections,
-  their defaults were neutral and off so that no existing look changed; the
-  character went into the presets instead. Users notice when their saved work
-  renders differently.
-- **Presets are specific machines, not intensity levels.** "A Super 8 cartridge
-  shot on a spring-wound camera in 1974 and projected twice since" is a preset.
-  "Film 60%" is not. CRTBOX's ten presets are each a particular object in a
-  particular state and that is why they are useful.
-- **Commit messages carry the reasoning**, especially why something was *not*
+- **Measure, do not assume.** Both earlier builds had confident diagnoses that
+  were wrong. When a measurement looks surprising, suspect the measurement
+  first.
+- **Say what you did not verify.** FILMBOX's README says plainly which stock
+  figures are approximations and that its Windows installer was built under
+  Wine and never ran a render there. CAMAI's codec model will be approximate
+  somewhere: say where, with the numbers from the comparison against the real
+  encoder.
+- **New sections ship inert.** Defaults are neutral and off; character goes in
+  the presets.
+- **Presets are specific objects in specific states.** Each is one machine,
+  one year, one situation. Some to start from:
+  - *Christmas morning, 2002*: a single-chip MiniDV palmcorder under tungsten,
+    AWB gone orange, gain up, 12-bit audio, the LCD display on the AV output.
+  - *Skate video, 2001*: a three-chip DV camera with a fisheye adapter, a fast
+    shutter in sun, heavy detail enhancement.
+  - *Wedding reception, LP mode, 2004*: low light, dancing that combs,
+    dropouts and AGC breathing.
+  - *Holiday, 1997*: Hi8 with the date imprinted (needs the analogue tape
+    passes; a later milestone).
+  - *Night mode in the woods*: infrared, the hot spot, the green, the breathing
+    room tone.
+  - *Found tape, captured in 2006*: DV, then composite capture, one field
+    dropped, 320×240 and re-encoded.
+  - *The camera whose clock was never set*.
+
+  "Camcorder 60%" is not a preset.
+- **Commit messages carry the reasoning**, especially why something was not
   done the obvious way.
+- **Know your tools.** FFmpeg can make DV, so use it as ground truth. The
+  probe can see pixels, so prove physics with it rather than describing it.
 
 ---
 
 ## Suggested order
 
-1. Fork CRTBOX. Get it building, run `npm test`, read `src/core/params.ts`,
-   `src/video/renderer.ts` and `scripts/smoke.mjs`.
-2. Strip the CRT/VHS-specific passes and parameters; keep the apparatus.
-3. Build the **Stock** engine: characteristic curve first (it is the foundation),
-   then density-dependent grain, then dyes and halation.
-4. Build the **Gate** engine: weave, flicker, dirt in both kinds, scratches,
-   splices, pulldown.
-5. Add the **Lens** section.
-6. Rebuild the audio chain for magnetic stripe, optical track and projector
-   noise, and wire the A/V link.
-7. Write presets as specific objects: Super 8 Reversal 1974, 16mm Documentary,
-   35mm Print Fourth Generation, Faded Eastman, Home Movie Found In A Loft.
-8. Write the help text for every parameter, with the check enforcing it.
+1. Bring FILMBOX in (above). Get it building, run `npm test`, and read
+   `src/core/params.ts`, `src/film/clock.ts`, `src/video/renderer.ts`,
+   `src/testing/probe.ts` and `scripts/smoke.mjs`.
+2. Strip the film-specific passes and parameters; keep the apparatus.
+3. Build the field clock: 59.94 and 50 fields, bottom first, each with its own
+   source moment. Prove it with the moving-bar stage before anything else is
+   built on it.
+4. Build the **Tape** engine's codec in the native raster: chroma
+   subsampling, then DCT and quantisation, then rate control. Validate it
+   against FFmpeg's `dvvideo` as soon as it exists, not at the end.
+5. Build the **Camera** engine: sensor (mosaic, smear, gain noise, knee and
+   clip), then DSP (detail enhancement, white balance), then the automatics,
+   then the operator and the zoom.
+6. Build the **Display** engine: the overlay layer with its three insertion
+   points and its clocks, then deinterlacing, scaling and delivery.
+7. Rebuild the audio chain: microphone on the body, transport, motors, AGC,
+   12-bit and 16-bit DV audio, dropouts. Wire the A/V link through the event
+   clock.
+8. Presets as specific objects; help for every parameter, with the check
+   enforcing it; `docs/PRESETS.md` generated.
 9. Smoke stages for everything above.
-10. Package and release.
+10. Package and release: the Windows workflow on a tag, and a DV file as an
+    export format.
 
-Super 8 end to end is a better first milestone than all six formats half done.
+One NTSC single-chip MiniDV palmcorder from 2002 end to end is the first
+milestone:
+
+- fields, codec, sharpening and smear;
+- the LCD display with its battery and REC;
+- the date that jumps at each break;
+- the zoom you can hear.
+
+That is better than every format half done. The analogue camcorders and the
+MPEG-2 ones come after it.
