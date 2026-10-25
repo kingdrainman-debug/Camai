@@ -1,20 +1,26 @@
 /**
  * A measurement hook for the smoke test.
  *
- * Film artefacts are measurable — a curve has a toe or it does not, grain
- * tracks the gate or it does not — but only if the measurement can control
- * exactly what goes in. This renders synthetic sources through a real
- * renderer of either kind, at chosen output frames, and hands back pixels.
- * It uses the same renderers, the same frame clock and the same source
- * tagging as the application; only the source and the canvas are its own.
+ * Camcorder artefacts are measurable — a field shows one moment or another,
+ * a block boundary has a gradient or it does not — but only if the
+ * measurement controls exactly what goes in. This renders synthetic sources
+ * through a real renderer of either kind, at chosen output frames, and hands
+ * back pixels. Each source is drawn at the exact capture moment of every
+ * field that asks for it, so it is an infinitely fast source: whatever the
+ * output shows about time came from the field clock, not from the footage.
+ *
+ * It uses the same renderers, the same clock and the same source tagging as
+ * the application; only the source and the canvas are its own. It reports
+ * any requested setting the schema would have clamped or dropped, so a test
+ * cannot silently measure something it did not ask for (FILMBOX, lesson 18).
  *
  * It is always present, because the packaged build is what the smoke test
  * loads over file://, and it costs nothing until it is called.
  */
 
-import { DEFAULTS, ParamValue, Settings, applyEngineMasters, sanitize } from '../core/params';
+import { DEFAULTS, ParamValue, Settings, applyEngineMasters, sanitize, settingsProblems } from '../core/params';
 import { PRESETS } from '../core/presets';
-import { frameState, geometry, rates } from '../film/clock';
+import { frameAspect, frameState, neededTaps, rates } from '../cam/clock';
 import { BackendChoice, createRenderer } from '../video/backend';
 
 export type ProbeSource =
@@ -22,8 +28,17 @@ export type ProbeSource =
   | { kind: 'ramp'; stops: number }
   | { kind: 'texture'; panPxPerSec: number; cell: number }
   | { kind: 'counter' }
+  | { kind: 'bar'; pxPerSec: number; width?: number }
+  | { kind: 'zone' }
+  | { kind: 'edge'; low?: number; high?: number }
+  | { kind: 'redline'; width?: number }
+  | { kind: 'redtext' }
+  | { kind: 'point'; size?: number; level?: number }
+  | { kind: 'noise'; amount: number }
+  | { kind: 'verticals'; spacing?: number }
   | { kind: 'bars' }
-  | { kind: 'scene' };
+  | { kind: 'scene' }
+  | { kind: 'interior' };
 
 export interface ProbeRequest {
   backend: BackendChoice;
@@ -33,21 +48,30 @@ export interface ProbeRequest {
   height: number;
   srcWidth?: number;
   srcHeight?: number;
-  /** Output frame numbers to render. */
+  /** Output frame numbers to render, in order. */
   frames: number[];
   seed?: number;
   /** Return the pixels, or only a channel-mean summary. */
   pixels?: boolean;
   /** Read frames back at all. Off for timing, where a readback would dominate. */
   readback?: boolean;
+  /** Return each segment's quantisation number. */
+  qno?: boolean;
+  /** Zoom bar shown, as if the rocker were pressed. */
+  zoomMoving?: boolean;
 }
 
 export interface ProbeFrame {
   outFrame: number;
-  filmFrames: [number, number];
-  /** RGB, top row first, when pixels were asked for. */
+  dvFrame: number;
+  /** Source time each field showed, in temporal order, with its parity. */
+  fields: { srcT: number; parity: number }[];
   rgb?: number[];
   mean: [number, number, number];
+  qno?: number[];
+  exposure: { shutter: number; fNumber: number; gainDb: number; X: number; wb: number[] };
+  lost: number;
+  clock: { wallMs: number; timecode: number; battery: number; shot: number };
 }
 
 export interface ProbeResult {
@@ -56,19 +80,26 @@ export interface ProbeResult {
   width: number;
   height: number;
   ms: number;
+  problems: string[];
 }
 
-function drawSource(ctx: CanvasRenderingContext2D, w: number, h: number, src: ProbeSource, t: number, n: number): void {
+function hashCell(cx: number, cy: number): number {
+  let h = Math.imul(cx ^ 0x5bd1e995, 0x27d4eb2d) ^ Math.imul(cy + 0x165667b1, 0x9e3779b1);
+  h ^= h >>> 15;
+  h = Math.imul(h, 0x85ebca6b);
+  h ^= h >>> 13;
+  return (h >>> 0) / 4294967296;
+}
+
+function drawSource(ctx: CanvasRenderingContext2D, w: number, h: number, src: ProbeSource, t: number): void {
+  ctx.save();
   if (src.kind === 'grey') {
     const v = Math.round(src.level * 255);
     ctx.fillStyle = `rgb(${v},${v},${v})`;
     ctx.fillRect(0, 0, w, h);
-    return;
-  }
-  if (src.kind === 'ramp') {
-    // A horizontal log-exposure ramp: from `stops` below white at the left to
-    // white at the right, in linear light, so the output's response to log
-    // exposure can be read straight off a row.
+  } else if (src.kind === 'ramp') {
+    // A horizontal log-exposure ramp, `stops` below white at the left to
+    // white at the right, in linear light.
     const img = ctx.createImageData(w, h);
     for (let x = 0; x < w; x++) {
       const lin = Math.pow(2, -src.stops * (1 - (x + 0.5) / w));
@@ -81,57 +112,113 @@ function drawSource(ctx: CanvasRenderingContext2D, w: number, h: number, src: Pr
       }
     }
     ctx.putImageData(img, 0, 0);
-    return;
-  }
-  if (src.kind === 'texture') {
-    // A fixed random pattern sliding sideways: the subject moving.
+  } else if (src.kind === 'texture' || src.kind === 'noise') {
     const img = ctx.createImageData(w, h);
-    const shift = Math.round(src.panPxPerSec * t);
+    const shift = src.kind === 'texture' ? Math.round(src.panPxPerSec * t) : 0;
+    const cell = src.kind === 'texture' ? src.cell : 1;
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
-        const cx = Math.floor((x + shift) / src.cell);
-        const cy = Math.floor(y / src.cell);
-        let hsh = Math.imul(cx ^ 0x5bd1e995, 0x27d4eb2d) ^ Math.imul(cy + 0x165667b1, 0x9e3779b1);
-        hsh ^= hsh >>> 15;
-        hsh = Math.imul(hsh, 0x85ebca6b);
-        hsh ^= hsh >>> 13;
-        const v = 60 + ((hsh >>> 0) % 140);
+        let v: number;
+        if (src.kind === 'texture') {
+          v = 60 + hashCell(Math.floor((x + shift) / cell), Math.floor(y / cell)) * 140;
+        } else {
+          // A smooth gradient, with a patch of fine noise in the left third.
+          v = 70 + (110 * y) / h;
+          if (x < w / 3) v += (hashCell(x, y) - 0.5) * 255 * src.amount;
+        }
         const o = (y * w + x) * 4;
-        img.data[o] = img.data[o + 1] = img.data[o + 2] = v;
+        img.data[o] = img.data[o + 1] = img.data[o + 2] = Math.max(0, Math.min(255, Math.round(v)));
         img.data[o + 3] = 255;
       }
     }
     ctx.putImageData(img, 0, 0);
-    return;
-  }
-  if (src.kind === 'counter') {
-    // Brightness encodes which film frame this is, so the frame a field shows
-    // can be read back from its level.
-    const v = Math.round(40 + (n % 8) * 25);
+  } else if (src.kind === 'counter') {
+    // Brightness encodes which 1/240 s the source was sampled in, so the
+    // moment each field shows can be read back from its level.
+    const k = Math.floor(t * 240 + 1e-6) % 8;
+    const v = 40 + k * 25;
     ctx.fillStyle = `rgb(${v},${v},${v})`;
     ctx.fillRect(0, 0, w, h);
-    return;
-  }
-  if (src.kind === 'scene') {
+  } else if (src.kind === 'bar') {
+    ctx.fillStyle = 'rgb(40,40,40)';
+    ctx.fillRect(0, 0, w, h);
+    const bw = src.width ?? w / 40;
+    const x = (w * 0.1 + src.pxPerSec * t) % w;
+    ctx.fillStyle = 'rgb(230,230,230)';
+    ctx.fillRect(x, 0, bw, h);
+  } else if (src.kind === 'zone') {
+    // A zone plate: frequency rising with radius, to Nyquist at the edge.
+    const img = ctx.createImageData(w, h);
+    const k = Math.PI / Math.max(w, h);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const dx = x - w / 2;
+        const dy = y - h / 2;
+        const v = 128 + 100 * Math.cos(k * (dx * dx + dy * dy) * 0.5);
+        const o = (y * w + x) * 4;
+        img.data[o] = img.data[o + 1] = img.data[o + 2] = Math.round(v);
+        img.data[o + 3] = 255;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+  } else if (src.kind === 'edge') {
+    const lo = Math.round((src.low ?? 0.25) * 255);
+    const hi = Math.round((src.high ?? 0.7) * 255);
+    ctx.fillStyle = `rgb(${lo},${lo},${lo})`;
+    ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = `rgb(${hi},${hi},${hi})`;
+    ctx.fillRect(Math.round(w / 2), 0, w - Math.round(w / 2), h);
+  } else if (src.kind === 'redline') {
+    ctx.fillStyle = 'rgb(128,128,128)';
+    ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = 'rgb(230,20,20)';
+    const lw = src.width ?? Math.max(1, Math.round(w / 640));
+    ctx.fillRect(Math.round(w / 2), 0, lw, h);
+    // And a thin horizontal one, for vertical chroma spread.
+    ctx.fillRect(0, Math.round(h * 0.75), w, Math.max(1, Math.round(h / 480)));
+  } else if (src.kind === 'redtext') {
+    ctx.fillStyle = 'rgb(128,128,128)';
+    ctx.fillRect(0, 0, w, h);
+  } else if (src.kind === 'point') {
+    ctx.fillStyle = 'rgb(18,18,24)';
+    ctx.fillRect(0, 0, w, h);
+    const v = Math.round((src.level ?? 1) * 255);
+    ctx.fillStyle = `rgb(${v},${v},${v})`;
+    const r = src.size ?? Math.max(2, w / 160);
+    ctx.beginPath();
+    ctx.arc(w * 0.4, h * 0.35, r, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (src.kind === 'verticals') {
+    ctx.fillStyle = 'rgb(30,30,30)';
+    ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = 'rgb(220,220,220)';
+    const sp = src.spacing ?? w / 8;
+    for (let x = sp / 2; x < w; x += sp) ctx.fillRect(Math.round(x), 0, Math.max(2, Math.round(w / 200)), h);
+  } else if (src.kind === 'bars') {
+    const bars = ['#c0c0c0', '#c0c000', '#00c0c0', '#00c000', '#c000c0', '#c00000', '#0000c0'];
+    bars.forEach((c, i) => {
+      ctx.fillStyle = c;
+      ctx.fillRect((i * w) / bars.length, 0, w / bars.length + 1, h * 0.75);
+    });
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, h * 0.75, w, h * 0.25);
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(w * 0.06, h * 0.8, w * 0.25, h * 0.15);
+    ctx.fillStyle = '#808080';
+    ctx.fillRect(w * 0.4, h * 0.8, w * 0.25, h * 0.15);
+  } else if (src.kind === 'interior') {
+    drawInterior(ctx, w, h, t);
+  } else {
     drawScene(ctx, w, h, t);
-    return;
   }
-  const bars = ['#c0c0c0', '#c0c000', '#00c0c0', '#00c000', '#c000c0', '#c00000', '#0000c0'];
-  bars.forEach((c, i) => {
-    ctx.fillStyle = c;
-    ctx.fillRect((i * w) / bars.length, 0, w / bars.length + 1, h * 0.75);
-  });
-  ctx.fillStyle = '#000';
-  ctx.fillRect(0, h * 0.75, w, h * 0.25);
-  ctx.fillStyle = '#fff';
-  ctx.fillRect(w * 0.06, h * 0.8, w * 0.25, h * 0.15);
+  ctx.restore();
 }
 
 /**
- * A small outdoor scene with the things film treats most characteristically:
- * a sky running to a hot sun, skin, foliage, a saturated red, a white shirt in
- * sun and a figure in deep shade. Drawn, not photographed, so it ships with
- * the code and every render of it is reproducible.
+ * A small outdoor scene with the things a video camera treats most
+ * characteristically: a sky running to a hot sun, skin, foliage, a saturated
+ * red, a white shirt in sun and a figure in deep shade. Drawn, not
+ * photographed, so it ships with the code and every render is reproducible.
  */
 function drawScene(g: CanvasRenderingContext2D, w: number, h: number, t: number): void {
   const sky = g.createLinearGradient(0, 0, 0, h * 0.62);
@@ -187,14 +274,99 @@ function drawScene(g: CanvasRenderingContext2D, w: number, h: number, t: number)
   g.fill();
 }
 
+/**
+ * A living room at night under tungsten light: a lamp, a window black with
+ * night, a sofa, a red jumper and a cake with candles. Drawn as it would look
+ * to the eye, which has already adapted — the White Balance section's Light
+ * setting is what makes it orange.
+ */
+function drawInterior(g: CanvasRenderingContext2D, w: number, h: number, t: number): void {
+  const wall = g.createLinearGradient(0, 0, 0, h);
+  wall.addColorStop(0, '#8a8478');
+  wall.addColorStop(1, '#5a554c');
+  g.fillStyle = wall;
+  g.fillRect(0, 0, w, h);
+  // A night window.
+  g.fillStyle = '#0c0f16';
+  g.fillRect(w * 0.06, h * 0.12, w * 0.22, h * 0.36);
+  g.fillStyle = '#d8d2c4';
+  g.fillRect(w * 0.06, h * 0.29, w * 0.22, h * 0.012);
+  g.fillRect(w * 0.168, h * 0.12, w * 0.012, h * 0.36);
+  // A lamp with a bright bulb under its shade.
+  g.fillStyle = '#e8d8b0';
+  g.beginPath();
+  g.moveTo(w * 0.74, h * 0.16);
+  g.lineTo(w * 0.86, h * 0.16);
+  g.lineTo(w * 0.89, h * 0.3);
+  g.lineTo(w * 0.71, h * 0.3);
+  g.fill();
+  const bulb = g.createRadialGradient(w * 0.8, h * 0.31, 0, w * 0.8, h * 0.31, h * 0.08);
+  bulb.addColorStop(0, '#ffffff');
+  bulb.addColorStop(0.3, '#fff8e0');
+  bulb.addColorStop(1, 'rgba(255,240,200,0)');
+  g.fillStyle = bulb;
+  g.fillRect(w * 0.7, h * 0.22, w * 0.2, h * 0.2);
+  g.fillStyle = '#3a2c20';
+  g.fillRect(w * 0.795, h * 0.3, w * 0.01, h * 0.4);
+  // A sofa.
+  g.fillStyle = '#4b5a6e';
+  g.fillRect(w * 0.0, h * 0.6, w * 0.6, h * 0.3);
+  g.fillStyle = '#56667c';
+  g.fillRect(w * 0.0, h * 0.52, w * 0.6, h * 0.1);
+  // Someone in a red jumper on the sofa, moving a little.
+  const fx = w * (0.32 + 0.02 * Math.sin(t * 1.7));
+  g.fillStyle = '#b8261e';
+  g.fillRect(fx - w * 0.07, h * 0.5, w * 0.14, h * 0.22);
+  g.fillStyle = '#d8a080';
+  g.beginPath();
+  g.ellipse(fx, h * 0.43, w * 0.04, h * 0.07, 0, 0, Math.PI * 2);
+  g.fill();
+  // A table with a white cake and candles.
+  g.fillStyle = '#6a4a30';
+  g.fillRect(w * 0.55, h * 0.76, w * 0.4, h * 0.05);
+  g.fillStyle = '#f4f0ea';
+  g.fillRect(w * 0.65, h * 0.66, w * 0.18, h * 0.1);
+  for (let i = 0; i < 5; i++) {
+    const x = w * (0.67 + i * 0.035);
+    g.fillStyle = '#e04a8a';
+    g.fillRect(x, h * 0.6, w * 0.006, h * 0.06);
+    const flick = 0.8 + 0.2 * Math.sin(t * 9 + i * 1.7);
+    g.fillStyle = `rgba(255,${Math.round(220 * flick)},120,1)`;
+    g.beginPath();
+    g.ellipse(x + w * 0.003, h * 0.59, w * 0.004, h * 0.012, 0, 0, Math.PI * 2);
+    g.fill();
+  }
+  g.fillStyle = '#2a2420';
+  g.fillRect(0, h * 0.9, w, h * 0.1);
+}
+
+function drawRedText(g: CanvasRenderingContext2D, w: number, h: number): void {
+  g.fillStyle = 'rgb(220,24,24)';
+  // Block letters drawn with rectangles, so no font is involved.
+  const s = Math.max(2, Math.round(h / 60));
+  const glyph = [
+    '### #   # ###',
+    '#   ## ## #  ',
+    '##  # # # ## ',
+    '#   #   # #  ',
+    '### #   # ###',
+  ];
+  const x0 = Math.round(w * 0.25);
+  const y0 = Math.round(h * 0.45);
+  for (let r = 0; r < glyph.length; r++) {
+    for (let c = 0; c < glyph[r].length; c++) if (glyph[r][c] === '#') g.fillRect(x0 + c * s * 2, y0 + r * s * 2, s * 2, s * 2);
+  }
+}
+
 export async function renderProbe(req: ProbeRequest): Promise<ProbeResult> {
   const t0 = performance.now();
+  const problems = settingsProblems(req.settings);
   const canvas = document.createElement('canvas');
   canvas.width = req.width;
   canvas.height = req.height;
   const { renderer, kind } = createRenderer(canvas, req.backend);
-  const srcW = req.srcWidth ?? 640;
-  const srcH = req.srcHeight ?? 480;
+  const srcW = req.srcWidth ?? 720;
+  const srcH = req.srcHeight ?? 540;
   const srcCanvas = document.createElement('canvas');
   srcCanvas.width = srcW;
   srcCanvas.height = srcH;
@@ -202,7 +374,6 @@ export async function renderProbe(req: ProbeRequest): Promise<ProbeResult> {
   const settings = applyEngineMasters(sanitize(req.settings, DEFAULTS));
   const seed = req.seed ?? 1337;
   const r = rates(settings);
-  const speed = r.projector / r.camera;
 
   const read = document.createElement('canvas');
   read.width = req.width;
@@ -212,16 +383,32 @@ export async function renderProbe(req: ProbeRequest): Promise<ProbeResult> {
   const frames: ProbeFrame[] = [];
   try {
     for (const k of req.frames) {
-      const time = (k / r.output) * speed;
-      const fs = frameState({ settings, time, outFrame: k, seed, srcW, srcH });
-      for (const field of fs.fields) {
-        if (renderer.hasFrame(field.n)) continue;
-        drawSource(sctx, srcW, srcH, req.source, field.capture, field.n);
-        renderer.setSource(srcCanvas, srcW, srcH, field.n);
+      const time = k / r.output;
+      const fs = frameState({ settings, time, outFrame: k, seed });
+      for (const tap of neededTaps(fs)) {
+        if (renderer.hasFrame(tap.tag)) continue;
+        drawSource(sctx, srcW, srcH, req.source, tap.srcT);
+        if (req.source.kind === 'redtext') drawRedText(sctx, srcW, srcH);
+        renderer.setSource(srcCanvas, srcW, srcH, tap.tag);
       }
-      renderer.render({ settings, time, outFrame: k, frame: k, dt: 1 / r.output, audioLevel: 0, splitX: -1, seed });
+      const tel = renderer.render({ settings, time, outFrame: k, frame: k, dt: 1 / r.output, audioLevel: 0, splitX: -1, seed, zoomMoving: req.zoomMoving });
+      const plan = renderer.plan!;
+      const e = plan.fields[0].exposure;
+      const base: ProbeFrame = {
+        outFrame: k,
+        dvFrame: tel.dvFrame,
+        fields: fs.fields.map((f) => ({ srcT: f.srcT, parity: f.parity })),
+        mean: [0, 0, 0],
+        exposure: { shutter: e.shutter, fNumber: e.fNumber, gainDb: e.gainDb, X: e.X, wb: [...e.wb] },
+        lost: fs.lost ? fs.lost.reduce((a, b) => a + b, 0) : 0,
+        clock: { wallMs: fs.clock.wallMs, timecode: fs.clock.timecode, battery: fs.clock.battery, shot: fs.clock.shot },
+      };
+      if (req.qno) {
+        const q = renderer.readQno();
+        if (q) base.qno = Array.from(q);
+      }
       if (req.readback === false) {
-        frames.push({ outFrame: k, filmFrames: [fs.fields[0].n, fs.fields[1].n], mean: [0, 0, 0] });
+        frames.push(base);
         continue;
       }
       rctx.drawImage(canvas, 0, 0);
@@ -241,15 +428,10 @@ export async function renderProbe(req: ProbeRequest): Promise<ProbeResult> {
           rgb[i * 3 + 2] = data[i * 4 + 2];
         }
       }
-      frames.push({
-        outFrame: k,
-        filmFrames: [fs.fields[0].n, fs.fields[1].n],
-        rgb,
-        mean: [sr / n, sg / n, sb / n],
-      });
+      base.mean = [sr / n, sg / n, sb / n];
+      base.rgb = rgb;
+      frames.push(base);
     }
-    // A WebGL draw is asynchronous; without a readback the clock would stop
-    // before the work did. One tiny read at the end flushes the queue.
     if (req.readback === false) {
       rctx.drawImage(canvas, 0, 0, 1, 1, 0, 0, 1, 1);
       rctx.getImageData(0, 0, 1, 1);
@@ -257,26 +439,39 @@ export async function renderProbe(req: ProbeRequest): Promise<ProbeResult> {
   } finally {
     renderer.dispose();
   }
-  return { backend: kind, frames, width: req.width, height: req.height, ms: performance.now() - t0 };
+  return { backend: kind, frames, width: req.width, height: req.height, ms: performance.now() - t0, problems };
+}
+
+/** Draw a probe source into a canvas, for the codec comparison against FFmpeg. */
+export function probeSourceImage(source: ProbeSource, w: number, h: number, t = 0): string {
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  const g = c.getContext('2d')!;
+  drawSource(g, w, h, source, t);
+  if (source.kind === 'redtext') drawRedText(g, w, h);
+  return c.toDataURL('image/png');
 }
 
 declare global {
   interface Window {
-    __filmbox?: {
+    __camai?: {
       renderProbe: typeof renderProbe;
+      probeSourceImage: typeof probeSourceImage;
       defaults: Settings;
       presets: Record<string, Settings>;
       /** Shape of the output frame for these settings — the app's own answer. */
-      aspect(settings: Record<string, ParamValue>, srcW: number, srcH: number): number;
+      aspect(settings: Record<string, ParamValue>): number;
     };
   }
 }
 
 export function installProbe(): void {
-  window.__filmbox = {
+  window.__camai = {
     renderProbe,
+    probeSourceImage,
     defaults: DEFAULTS,
     presets: Object.fromEntries(PRESETS.map((p) => [p.id, p.settings])),
-    aspect: (settings, srcW, srcH) => geometry(applyEngineMasters(sanitize(settings, DEFAULTS)), srcW, srcH).outAspect,
+    aspect: (settings) => frameAspect(applyEngineMasters(sanitize(settings, DEFAULTS))),
   };
 }

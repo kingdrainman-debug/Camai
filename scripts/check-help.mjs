@@ -27,7 +27,7 @@ const MIN_PARAM = 60;
 const MIN_SECTION = 120;
 
 const entry = join(root, '.check-help-entry.ts');
-const out = await mkdtemp(join(tmpdir(), 'filmbox-help-'));
+const out = await mkdtemp(join(tmpdir(), 'camai-help-'));
 
 try {
   await writeFile(

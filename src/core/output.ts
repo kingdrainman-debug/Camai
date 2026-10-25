@@ -1,5 +1,5 @@
 import type { Settings } from './params';
-import { geometry } from '../film/clock';
+import { frameAspect as cameraAspect, systemOf } from '../cam/clock';
 
 /**
  * Output framing.
@@ -9,14 +9,16 @@ import { geometry } from '../film/clock';
  * multiplied by a scale factor, while the shader letterboxed the picture inside
  * whatever frame it was handed. Choose 4:3 on a 16:9 source and you got a 16:9
  * file with bars baked in — the aspect setting changed the picture but never
- * the file. Film has stronger opinions about aspect than television ever did,
- * so the frame is always computed from the projection aspect, here.
+ * the file (CRTBOX, lesson 4). So the frame is always computed here, from the
+ * DV raster's active picture at its pixel aspect: 4:3, or 16:9 in a camera's
+ * cropped 16:9 mode.
  *
  * Height is the quantity that is preserved, not width, so matching the source
  * height keeps the detail of the picture and only the framing changes.
  */
 
 export type ResolutionTarget =
+  | 'native'
   | 'source'
   | '480p'
   | '576p'
@@ -42,6 +44,7 @@ const TARGET_HEIGHTS: Partial<Record<ResolutionTarget, number>> = {
 };
 
 export const RESOLUTION_TARGETS: { value: ResolutionTarget; label: string }[] = [
+  { value: 'native', label: 'DV raster height' },
   { value: 'source', label: 'Match source' },
   { value: '480p', label: '480p · NTSC' },
   { value: '576p', label: '576p · PAL' },
@@ -53,13 +56,15 @@ export const RESOLUTION_TARGETS: { value: ResolutionTarget; label: string }[] = 
 ];
 
 /**
- * The aspect ratio of the projected picture, which is what the frame should be.
+ * The aspect ratio of the picture, which is what the frame should be.
  *
- * Comes from the same geometry the renderers use, so the preview, the export
- * and the shaders can never disagree about the shape of the frame.
+ * Comes from the same function the renderers use, so the preview, the export
+ * and the shaders can never disagree about the shape of the frame. The source
+ * size does not enter into it: a camcorder's picture is the shape of its
+ * raster whatever it was pointed at.
  */
-export function frameAspect(settings: Settings, srcWidth: number, srcHeight: number): number {
-  return geometry(settings, srcWidth, srcHeight).outAspect;
+export function frameAspect(settings: Settings, _srcWidth = 0, _srcHeight = 0): number {
+  return cameraAspect(settings);
 }
 
 /** Encoders want even dimensions; an odd one fails or silently crops. */
@@ -85,7 +90,9 @@ export function outputSize(
 ): OutputSize {
   const aspect = frameAspect(settings, srcWidth, srcHeight);
   const baseHeight =
-    target === 'source'
+    target === 'native'
+      ? systemOf(settings).H
+      : target === 'source'
       ? Math.max(srcHeight, 2)
       : target === 'custom'
         ? Math.max(32, Math.min(4320, Math.round(customHeight)))

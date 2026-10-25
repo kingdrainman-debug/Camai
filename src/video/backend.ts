@@ -17,7 +17,8 @@
  * Automatic is the sensible default: try the GPU, fall back rather than fail.
  */
 
-import { FilmRenderer, RenderFrame, RenderTelemetry } from './renderer';
+import { CamRenderer, RenderFrame, RenderTelemetry } from './renderer';
+import type { FramePlan } from '../cam/plan';
 import { CpuRenderer } from './cpu/renderer';
 
 /**
@@ -40,12 +41,15 @@ export type BackendKind = 'gpu' | 'cpu';
 /** What both backends implement. */
 export interface Renderer {
   readonly sourceSize: { width: number; height: number };
-  /** Upload the source picture for one film frame. */
-  setSource(source: FrameSource | null, width: number, height: number, filmFrame?: number): void;
-  /** Whether the source for this film frame is already uploaded. */
-  hasFrame(filmFrame: number): boolean;
+  /** Upload the source picture for one moment, tagged by tagOf(capture time). */
+  setSource(source: FrameSource | null, width: number, height: number, tag?: number): void;
+  /** Whether the source for this moment is already uploaded. */
+  hasFrame(tag: number): boolean;
   render(f: RenderFrame): RenderTelemetry;
   resetHistory(): void;
+  /** The quantisation number of every segment of the last frame, for the probe. */
+  readQno(): Float32Array | null;
+  readonly plan: FramePlan | null;
   dispose(): void;
 }
 
@@ -69,7 +73,7 @@ export function createRenderer(canvas: HTMLCanvasElement, choice: BackendChoice)
   }
 
   try {
-    return { renderer: new FilmRenderer(canvas), kind: 'gpu', fellBack: null };
+    return { renderer: new CamRenderer(canvas), kind: 'gpu', fellBack: null };
   } catch (err) {
     const why = err instanceof Error ? err.message : String(err);
     if (choice === 'gpu') throw err;

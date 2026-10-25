@@ -3,7 +3,7 @@ import { isDesktop } from '../platform/desktop';
 import { describeDuration, formatTimecode, parseTimecode } from '../core/time';
 import { RESOLUTION_TARGETS, ResolutionTarget } from '../core/output';
 
-export type ExportFormat = 'h264' | 'hevc' | 'prores' | 'gif' | 'webm' | 'pngseq' | 'wav';
+export type ExportFormat = 'h264' | 'hevc' | 'prores' | 'dv' | 'gif' | 'webm' | 'pngseq' | 'wav';
 
 export interface ExportSettings {
   format: ExportFormat;
@@ -24,7 +24,7 @@ export const DEFAULT_EXPORT: ExportSettings = {
   format: isDesktop ? 'h264' : 'webm',
   quality: 18,
   scale: 1,
-  resolution: 'source',
+  resolution: '1080p',
   customHeight: 1080,
   start: 0,
   end: 0,
@@ -46,8 +46,8 @@ interface Props {
   upscale: number;
   /** Frame rate of the output, from Framing & Output. */
   fps: number;
-  /** Film frames per second shown, for the cadence note. */
-  filmFps: number;
+  /** DV frames per second, for the field note. */
+  dvFps: number;
   onChange(next: ExportSettings): void;
   onRenderDeterministic(): void;
   onRecordRealtime(): void;
@@ -58,6 +58,7 @@ interface Props {
 const FORMATS: { value: ExportFormat; label: string; desktopOnly?: boolean; hint: string }[] = [
   { value: 'h264', label: 'H.264 · .mp4', desktopOnly: true, hint: 'Plays everywhere. Muxed with the processed audio.' },
   { value: 'hevc', label: 'HEVC · .mp4', desktopOnly: true, hint: 'Smaller at the same quality; fussier about players.' },
+  { value: 'dv', label: 'DV · .dv', desktopOnly: true, hint: 'A real DV file, 720 × 480 or 720 × 576, interlaced, bottom field first, with PCM audio, cut as DV by any editor. The picture is rendered up to the codec and FFmpeg’s own dvvideo encoder does the DV encoding, so the codec in the file is the codec in the file; the display stages, which are not on a tape, are left out.' },
   { value: 'prores', label: 'ProRes 422 HQ · .mov', desktopOnly: true, hint: 'For handing to an edit. Large files, uncompressed audio.' },
   { value: 'gif', label: 'Animated GIF', desktopOnly: true, hint: 'Palette-optimised. No audio, obviously.' },
   { value: 'webm', label: 'WebM · VP9 + Opus', hint: 'Captured in real time from the preview. The only video format a browser tab can write on its own.' },
@@ -118,7 +119,7 @@ export function ExportPanel({
   outputSize,
   upscale,
   fps,
-  filmFps,
+  dvFps,
   onChange,
   onRenderDeterministic,
   onRecordRealtime,
@@ -132,7 +133,7 @@ export function ExportPanel({
       setFfmpeg(false);
       return;
     }
-    window.filmbox?.ffmpegAvailable().then(setFfmpeg).catch(() => setFfmpeg(false));
+    window.camai?.ffmpegAvailable().then(setFfmpeg).catch(() => setFfmpeg(false));
   }, []);
 
   const set = <K extends keyof ExportSettings>(key: K, v: ExportSettings[K]) =>
@@ -167,7 +168,7 @@ export function ExportPanel({
         {!audioOnly && (
           <label
             className="field small"
-            title="Set under Gate ▸ Framing & Output, because the frame rate changes the picture: it decides the cadence."
+            title="Set under Display ▸ Output: one frame per DV frame, or one per field."
           >
             <span>FPS</span>
             <input type="text" value={formatFps(fps)} readOnly disabled />
@@ -228,22 +229,21 @@ export function ExportPanel({
           <strong>
             {outputSize.width}×{outputSize.height}
           </strong>{' '}
-          {' '}at {formatFps(fps)} fps — the frame is the shape of the projected
-          picture, so the aspect chosen under Framing &amp; Output is the aspect of
-          the file, with no bars baked in.
-          {Math.abs(fps - filmFps) > 0.01 && (
+          {' '}at {formatFps(fps)} fps — the frame is the shape of the picture at
+          the DV raster’s pixel aspect, with no bars baked in. Everything is
+          rendered in the 720-sample DV raster first and scaled to this size at
+          the end, so an 8×8 block stays 8×8 DV pixels whatever the output.
+          {fps > dvFps * 1.5 && (
             <>
               {' '}
-              {formatFps(filmFps)} fps film on {formatFps(fps)} fps video: frames
-              are held unevenly, which is the cadence a transfer really has.
+              Field rate: each DV frame is shown as its two fields in turn.
             </>
           )}
           {upscale > 1.02 && (
             <>
               {' '}
-              Upscaling {upscale.toFixed(1)}×: grain is generated at this resolution
-              rather than stretched, so it stays grain. The photographic detail
-              underneath is still whatever the source had.
+              The source is {upscale.toFixed(1)}× smaller than the output; the
+              camera only ever sees it at 720 samples a line in any case.
             </>
           )}
         </p>
@@ -260,9 +260,9 @@ export function ExportPanel({
             onCommit={(v) => set('stillDuration', Math.max(0.1, Math.min(3600, v)))}
           />
           <span className="range-note">
-            The still is held for this long while the film runs over it — new
-            grain every frame, weave, flicker, dirt — so the result is a moving
-            picture rather than a frozen frame.
+            The camera is pointed at the still for this long, and runs: the
+            operator’s hand, the automatics, the noise and the tape keep moving,
+            so the result is a recording rather than a frozen frame.
           </span>
         </div>
       )}
@@ -302,8 +302,8 @@ export function ExportPanel({
 
       {isDesktop && ffmpeg === false && (
         <p className="warn">
-          ffmpeg was not found, so the .mp4/.mov/.gif targets are hidden. Install the optional
-          <code> ffmpeg-static </code> dependency, or set <code>FILMBOX_FFMPEG</code> to a binary.
+          ffmpeg was not found, so the .mp4/.mov/.dv/.gif targets are hidden. Install the optional
+          <code> ffmpeg-static </code> dependency, or set <code>CAMAI_FFMPEG</code> to a binary.
         </p>
       )}
 

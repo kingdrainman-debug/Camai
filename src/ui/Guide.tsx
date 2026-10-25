@@ -14,7 +14,7 @@ import { PRESETS } from '../core/presets';
  * guarded and the fallback is simply to show it.
  */
 
-const STORE_KEY = 'filmbox.guide.hideOnStart';
+const STORE_KEY = 'camai.guide.hideOnStart';
 
 export function shouldShowOnStartup(): boolean {
   try {
@@ -35,13 +35,13 @@ function remember(hide: boolean): void {
 
 interface Props {
   onClose(): void;
-  /** Load a preset by id, so a film can be tried straight from the guide. */
+  /** Load a preset by id, so a camera can be tried straight from the guide. */
   onPickPreset(id: string): void;
   /** Opens the file dialog, so the first step is actionable from here. */
   onOpenMedia(): void;
 }
 
-type Section = 'start' | 'engines' | 'films' | 'workflow';
+type Section = 'start' | 'engines' | 'cameras' | 'workflow';
 
 export function Guide({ onClose, onPickPreset, onOpenMedia }: Props) {
   const [section, setSection] = useState<Section>('start');
@@ -72,17 +72,17 @@ export function Guide({ onClose, onPickPreset, onOpenMedia }: Props) {
       className="guide-backdrop"
       role="dialog"
       aria-modal="true"
-      aria-label="FILMBOX guide"
+      aria-label="CAMAI guide"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
       <div className="guide">
         <header className="guide-head">
-          <span className="logo">▤</span>
+          <span className="logo">●</span>
           <div className="guide-title">
-            <h1>FILMBOX</h1>
-            <p>Put your footage on a piece of film, and then put the film through everything film went through.</p>
+            <h1>CAMAI</h1>
+            <p>Point a camcorder at your footage, record it to DV tape, and watch the tape the way it was watched.</p>
           </div>
           <button ref={closeRef} className="guide-close" onClick={onClose} title="Close (Esc)">
             ✕
@@ -94,7 +94,7 @@ export function Guide({ onClose, onPickPreset, onOpenMedia }: Props) {
             [
               ['start', 'Getting footage in'],
               ['engines', 'The three engines'],
-              ['films', 'Reference films'],
+              ['cameras', 'Reference cameras'],
               ['workflow', 'Building a look'],
             ] as [Section, string][]
           ).map(([id, label]) => (
@@ -111,8 +111,8 @@ export function Guide({ onClose, onPickPreset, onOpenMedia }: Props) {
         <div className="guide-body">
           {section === 'start' && <GettingStarted onOpenMedia={onOpenMedia} onClose={onClose} />}
           {section === 'engines' && <Engines />}
-          {section === 'films' && (
-            <Films
+          {section === 'cameras' && (
+            <Cameras
               onPick={(id) => {
                 onPickPreset(id);
                 onClose();
@@ -129,7 +129,7 @@ export function Guide({ onClose, onPickPreset, onOpenMedia }: Props) {
               checked={hide}
               onChange={(e) => setHidden(e.target.checked)}
             />
-            <span>Don&rsquo;t show this when FILMBOX opens</span>
+            <span>Don&rsquo;t show this when CAMAI opens</span>
           </label>
           <span className="guide-reopen">Reopen any time with the <strong>Guide</strong> button, or <kbd>F1</kbd>.</span>
           <button className="primary" onClick={onClose}>
@@ -169,40 +169,38 @@ function GettingStarted({
           </button>
         </li>
         <li>
-          <strong>Drop a file on the FILMBOX icon</strong>, or use “Open with”, in the desktop
-          build.
+          <strong>Drop a file on the CAMAI icon</strong>, or use “Open with”, in the desktop build.
         </li>
       </ol>
 
-      <h2>The picture changes eighteen times a second</h2>
+      <h2>Your footage is the world</h2>
       <p>
-        Super 8 runs at 18 frames a second, so the preview does too: each film frame is exposed
-        once and held, however often your screen refreshes. That hold is half of what makes film
-        move like film. Change it under <em>Stock ▸ Format &amp; Stock ▸ Camera speed</em>, and
-        choose the video frame rate under <em>Gate ▸ Framing &amp; Output</em> — anything but the
-        film rate gives the uneven cadence every transfer really had.
+        CAMAI treats what you load as the world in front of the camera, not as a picture to put a
+        filter on. The camera points at it — with a shaking hand, a zoom, an automatic exposure —
+        and records it the way a consumer camcorder did, in 720-sample DV fields, sixty moments a
+        second (fifty in 625/50). The more frames your source has, the more of that motion it can
+        show.
       </p>
 
       <h2>What comes out</h2>
       <p>
-        The frame is the shape of the projected picture. Pick 1.85 under{' '}
-        <em>Gate ▸ Framing &amp; Output ▸ Aspect</em> and the file is 1.85, cropped from the film
-        the way a projection mask crops it, with no bars baked in. Raise <em>Overscan</em> to see
-        past the gate: the frame line, the next frame, and the perforations where the real gauge
-        puts them.
+        The frame is the shape of the picture at the DV raster&rsquo;s pixel aspect: 4:3, or 16:9 in
+        the camera&rsquo;s 16:9 mode. Everything is rendered in the DV raster first and scaled at the
+        very end, so an 8×8 block is 8×8 DV pixels whatever size you export. On the desktop you can
+        also export a real <strong>DV file</strong> — encoded by FFmpeg&rsquo;s own DV encoder — that
+        any editor will cut as DV.
       </p>
       <p>
-        Still images become clips: the still is held while the film runs over it — new grain every
-        frame, weave, flicker, dirt — so an export is a moving picture, not a frozen one.
+        Still images become clips: the camera is pointed at the still and keeps running, so the
+        operator, the automatics, the noise and the tape keep moving.
       </p>
 
-      <h2>Sound is half of it</h2>
+      <h2>The camera always has sound</h2>
       <p>
-        Your source&rsquo;s soundtrack is put onto film too: a narrow magnetic stripe, or an
-        optical track with its crackle and its Academy roll-off. And the projector is in the room
-        with you, clattering once a frame. Leave <em>A/V Link</em> on: a frame the claw strikes
-        badly both jumps and clacks, and a splice through the gate pops in the speaker, because
-        they are the same event.
+        The microphone is on the camera body, so it hears the camera: the transport&rsquo;s whine,
+        the zoom motor whenever the zoom moves, the focus motor while it hunts, the REC button at the
+        start of every shot. With a silent source, that is the soundtrack. Leave the{' '}
+        <em>A/V Link</em> on: they are the same events the picture shows.
       </p>
     </>
   );
@@ -211,25 +209,25 @@ function GettingStarted({
 function Engines() {
   return (
     <>
-      <h2>The chain, in the order the light meets it</h2>
+      <h2>The chain, in the order the picture meets it</h2>
       <p>
-        FILMBOX models what happens to a picture on its way through film, step by step, and every
-        artefact comes from one of those steps rather than from a texture laid on top.
+        CAMAI models what happens to a picture on its way through a camcorder, step by step, and
+        every artefact comes from one of those steps rather than from a texture laid on top.
       </p>
       <ul className="guide-list">
         <li>
-          <strong>Lens</strong> — exposure, the colour of the light, and the lens itself: its
-          sharpness in line pairs per millimetre of film, its vignetting, fringing and flare.
+          <strong>Camera</strong> — the person holding it, a small cheap zoom, a CCD the size of a
+          fingernail read out in fields and smearing where it is overloaded, an automatic camera
+          chasing exposure, focus and white balance, and a DSP that sharpens every edge.
         </li>
         <li>
-          <strong>Stock</strong> — the emulsion. Its characteristic curve (the toe, the straight
-          line, the shoulder), its grain in three layers, halation, its dyes, the print it was made
-          into and how those dyes have faded since.
+          <strong>Tape</strong> — interlace, 4:1:1 or 4:2:0 colour, the DV codec with its fixed bit
+          budget crushing the result into 8×8 blocks, a tape that drops out, and the recording
+          breaks between shots.
         </li>
         <li>
-          <strong>Gate</strong> — the machinery. The camera&rsquo;s registration and shutter, the
-          projector&rsquo;s weave and shutter, dirt in the gate and dirt on the film, scratches,
-          splices, light leaks, decay, and the telecine that turned it into video.
+          <strong>Display</strong> — the camera&rsquo;s own display and date, where they entered the
+          chain, the capture card, the deinterlacer, the 2006 web upload and the screen.
         </li>
       </ul>
       <p>
@@ -239,29 +237,28 @@ function Engines() {
 
       <h2>Two things worth knowing</h2>
       <p>
-        <strong>The format is physical.</strong> Grain, halation, weave and lens sharpness are all
-        specified on the film, in micrometres and line pairs per millimetre, and the gauge converts
-        them. The same stock on Super 8 is several times grainier than on 35 mm because the frame is
-        enlarged more — you change the gauge, not a grain slider.
+        <strong>The bit budget is fixed.</strong> DV gives every five macroblocks the same number of
+        bits, so quality is whatever is left after the picture has paid for its detail. Gain noise is
+        detail as far as the codec is concerned: a dark room with the gain up blocks far worse than a
+        bright one, everywhere at once.
       </p>
       <p>
-        <strong>Grain is on the film.</strong> When the camera&rsquo;s claw misregisters, the image
-        moves and the grain does not. When the projector&rsquo;s gate weaves, the whole strip moves
-        — picture, grain and dust together. That difference is most of what separates real film
-        from a grain overlay.
+        <strong>Overlays have a path.</strong> The REC indicator was never recorded to tape. Where an
+        overlay enters the chain decides what the chain does to it: burned in before the codec it
+        rings and bleeds; drawn after decode it sits crisply on the blocks; drawn on the display it
+        is sharp on the screen&rsquo;s own pixels.
       </p>
     </>
   );
 }
 
-function Films({ onPick }: { onPick(id: string): void }) {
+function Cameras({ onPick }: { onPick(id: string): void }) {
   return (
     <>
-      <h2>Start from a piece of film, not from zero</h2>
+      <h2>Start from a camera, not from zero</h2>
       <p>
-        Each of these is a particular film in a particular state — a stock, a camera, a lab, a
-        projector, a cupboard — rather than an intensity level. Pick one, then change what is
-        different about yours.
+        Each of these is one machine in one situation — a year, a light, an operator, a tape —
+        rather than an intensity level. Pick one, then change what is different about yours.
       </p>
       <div className="guide-films">
         {PRESETS.map((p) => (
@@ -281,39 +278,39 @@ function Workflow() {
       <h2>Building a look</h2>
       <ol className="guide-steps">
         <li>
-          <strong>Choose the gauge and the stock.</strong> They decide the grain, the curve, the
-          colour and the frame rate. Reversal (Kodachrome, Ektachrome) clips highlights hard and is
-          most of why Super 8 looks the way it does; negative holds everything and is printed.
+          <strong>Choose the machine.</strong> Under <em>Camera ▸ Format</em>: 525/60 or 625/50, one
+          CCD, three, or CMOS, and the sensor&rsquo;s size. These decide the colour, the noise, the
+          smear and how the colour bleeds.
         </li>
         <li>
-          <strong>Set the exposure.</strong> Reversal is unforgiving: half a stop shows. A negative
-          will take two stops either way. Exposure is where the stock&rsquo;s character shows most.
+          <strong>Set the light, and let the camera chase it.</strong> <em>Exposure ▸ Scene light</em>{' '}
+          and <em>White Balance ▸ Light</em>. The automatic camera does the rest, wrongly in the right
+          ways: tungsten stays orange, a dark room gets gain and noise.
         </li>
         <li>
-          <strong>Give the camera its faults.</strong> Registration error, exposure flicker and a
-          flash frame at the head of each shot. Super 8&rsquo;s plastic pressure plate is worth
-          20–40 µm of weave.
+          <strong>Give it an operator.</strong> Tremor and sway for anything handheld, walking for
+          anything on the move, a bump now and then. Keyframe the zoom for the slow push in.
         </li>
         <li>
-          <strong>Then age it.</strong> Dye fading by years and storage, dust, a scratch that lasts
-          a few seconds, a splice or two, fog at the start of the roll. Little and often beats a lot
-          at once.
+          <strong>Then the tape and the screen.</strong> Breaks between shots, a dropout or two, the
+          camera&rsquo;s display on its AV output, a composite capture, a 2006 upload. Little and
+          often beats a lot at once.
         </li>
       </ol>
 
       <h2>Animate it</h2>
       <p>
-        Click the <strong>◷</strong> beside any parameter to animate it, scrub, and change the
-        value to write a keyframe. Numbers interpolate; stocks and switches hold, because there is
-        no stock half way between Kodachrome and Vision3. Hold keyframes cut — ramp a light leak in
-        over three frames and out again, or bring a scratch in for one shot.
+        Click the <strong>◷</strong> beside any parameter to animate it, scrub, and change the value
+        to write a keyframe. Numbers interpolate; switches and choices hold. Animate the zoom and the
+        motor is heard while it moves; animate the scene light from a room into daylight and watch
+        the exposure blow out and pump down.
       </p>
 
       <h2>Save it</h2>
       <p>
-        <strong>Save…</strong> writes a <code>.filmbox.json</code> carrying every parameter and all
-        the keyframes. <strong>Copy</strong> puts the same thing on the clipboard. The desktop
-        build can render from the command line with a preset file and no window at all.
+        <strong>Save…</strong> writes a <code>.camai.json</code> carrying every parameter and all the
+        keyframes. <strong>Copy</strong> puts the same thing on the clipboard. The desktop build can
+        render from the command line with a preset file and no window at all.
       </p>
     </>
   );

@@ -1,12 +1,12 @@
-import { Settings } from '../core/params';
+import { Settings, num } from '../core/params';
 import { EMPTY_TIMELINE, Timeline, countKeyframes, evaluateTimeline } from '../core/timeline';
-import { buildChain } from '../audio/engine';
-import { playbackRate, rates } from '../film/clock';
+import { buildChain, zoomVelocityAt } from '../audio/engine';
+import { shotsFor } from '../cam/clock';
 
 export interface OfflineAudioOptions {
   seed: number;
   sampleRate?: number;
-  /** Clip range in seconds. Omit for the whole file. */
+  /** Clip range in source seconds. Omit for the whole file. */
   start?: number;
   end?: number;
   onProgress?: (fraction: number) => void;
@@ -14,9 +14,8 @@ export interface OfflineAudioOptions {
   onStage?: (stage: string) => void;
   /**
    * Clip length to render when there is no source file — a still image being
-   * rendered as a video. The chain still produces the projector and the
-   * track's own noise, so the result is a film with a silent soundtrack
-   * running through a projector rather than silence.
+   * rendered as a video. The camera still hears itself, so the result is a
+   * camcorder's soundtrack of its own transport and the room, not silence.
    */
   duration?: number;
   /** Keyframes to follow while rendering. */
@@ -28,57 +27,19 @@ export interface OfflineAudioOptions {
  *
  * OfflineAudioContext renders as fast as it can and never yields, so a chain
  * configured once would keep its opening settings for the whole clip and every
- * audio keyframe would be silently ignored. Suspending on a schedule is the
- * only way to get automation in — 50 Hz is well past the point where the steps
- * are audible, given the graph already smooths its own parameter changes.
+ * audio keyframe — the zoom the motor follows, above all — would be silently
+ * ignored. Suspending on a schedule is the only way to get automation in.
  */
 const AUTOMATION_HZ = 50;
-
-/** Drive `chain.update` across the render so keyframed audio actually animates. */
-async function renderWithAutomation(
-  ctx: OfflineAudioContext,
-  chain: { update(settings: Settings, telemetry: AutomationTelemetry): void },
-  settings: Settings,
-  timeline: Timeline,
-  startTime: number,
-  durationSec: number,
-  speed = 1,
-): Promise<AudioBuffer> {
-  const telemetry = (time: number): AutomationTelemetry => ({ time, playing: true });
-
-  if (countKeyframes(timeline) === 0) {
-    chain.update(settings, telemetry(startTime));
-    return ctx.startRendering();
-  }
-
-  const stepCount = Math.max(1, Math.ceil(durationSec * AUTOMATION_HZ));
-  for (let i = 1; i < stepCount; i++) {
-    const at = (i / AUTOMATION_HZ);
-    if (at >= durationSec) break;
-    ctx.suspend(at).then(() => {
-      chain.update(evaluateTimeline(settings, timeline, startTime + at * speed), telemetry(startTime + at * speed));
-      void ctx.resume();
-    });
-  }
-  chain.update(evaluateTimeline(settings, timeline, startTime), telemetry(startTime));
-  return ctx.startRendering();
-}
-
-interface AutomationTelemetry {
-  time: number;
-  playing: boolean;
-}
 
 /**
  * Render the processed audio deterministically, off the clock.
  *
- * The worklets keep their own media clock, so an offline render produces the
- * same wow, the same splice pops and the same frame-locked clatter as the
- * realtime preview did — which is the whole reason the DSP is written that way.
- *
- * It can also do one thing the preview cannot: magnetic print-through as a
- * true pre-echo, which needs the programme from a reel's turn in the future.
- * Offline, that is just a second copy of the source started early.
+ * Recording breaks are honoured the way the picture honours them: each shot
+ * plays its own stretch of the source, butted against the next on the tape,
+ * so the sound cuts dead exactly where the picture cuts. The worklet keeps
+ * tape time, so it puts the click, the REC clunk, the dropouts and the
+ * motor at the same frames the picture shows them.
  */
 export async function renderProcessedAudio(
   file: Blob | null,
@@ -86,119 +47,87 @@ export async function renderProcessedAudio(
   opts: OfflineAudioOptions,
 ): Promise<AudioBuffer | null> {
   const sampleRate = opts.sampleRate ?? 48000;
-
-  // No file: a still image. Run silence through the chain for the requested
-  // length so the export still carries the projector and the track's noise.
-  if (!file) return renderSilent(settings, opts, sampleRate);
-
-  const raw = await file.arrayBuffer();
-  opts.onStage?.('decoding');
-
-  // A short-lived context purely for decoding; OfflineAudioContext can decode
-  // too, but a mismatched rate would resample twice.
-  const decodeCtx = new (window.AudioContext || (window as never as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
-  let decoded: AudioBuffer;
-  try {
-    decoded = await decodeCtx.decodeAudioData(raw);
-  } catch {
-    // Plenty of video files have no audio track at all, and some containers
-    // cannot be decoded by decodeAudioData even when they play fine in a
-    // <video>. Neither is an error worth stopping an export for — and a
-    // silent clip on a projector is still a projector, so it gets the same
-    // soundtrack a still does rather than none.
+  let decoded: AudioBuffer | null = null;
+  if (file) {
+    const raw = await file.arrayBuffer();
+    opts.onStage?.('decoding');
+    const decodeCtx = new AudioContext();
+    try {
+      decoded = await decodeCtx.decodeAudioData(raw);
+    } catch {
+      // Plenty of video files have no audio track at all, and some containers
+      // cannot be decoded by decodeAudioData even when they play fine in a
+      // <video>. Neither stops an export: the camera still has its own sound.
+      decoded = null;
+    }
     await decodeCtx.close().catch(() => undefined);
-    return renderSilent(settings, opts, sampleRate);
   }
-  await decodeCtx.close().catch(() => undefined);
 
+  const srcEnd = decoded ? decoded.duration : Math.max(0.1, (opts.start ?? 0) + (opts.duration ?? 0));
   const start = Math.max(0, opts.start ?? 0);
-  const end = Math.min(decoded.duration, opts.end ?? decoded.duration);
-  const durationSec = Math.max(0.01, end - start);
-  // A projector faster than the camera plays the source faster — and higher,
-  // since nothing on a projector corrects pitch. The output is shorter by the
-  // same factor, matching the picture.
-  const speed = playbackRate(rates(settings));
-  const outSec = durationSec / speed;
+  const end = Math.min(srcEnd, opts.end ?? srcEnd);
+  const shots = shotsFor(settings, opts.seed);
+  const outStart = shots.srcToOut(start).out;
+  const outEnd = Math.max(outStart + 0.01, shots.srcToOut(end).out);
+  const outSec = outEnd - outStart;
   const frames = Math.ceil(outSec * sampleRate);
 
-  const ctx = new OfflineAudioContext(2, frames, sampleRate);
-  const source = ctx.createBufferSource();
-  source.buffer = decoded;
-  source.playbackRate.value = speed;
-
-  // The pre-echo copy: the same programme, one reel's turn ahead.
-  let future: AudioBufferSourceNode | null = null;
-  const printDelay = Math.max(0.05, Number(settings['magnetic.printDelay']) || 1.8);
-  if (settings['magnetic.preEcho'] === true && settings['audio.track'] === 'magnetic') {
-    future = ctx.createBufferSource();
-    future.buffer = decoded;
-    future.playbackRate.value = speed;
-  }
-
-  opts.onStage?.('building chain');
-  const chain = await buildChain(ctx, source, settings, {
-    seed: opts.seed,
-    withAnalyser: false,
-    gateOnPause: false,
-    future: future ?? undefined,
-  });
-  chain.output.connect(ctx.destination);
-  chain.sync(start, true);
-
-  opts.onStage?.('rendering');
-  source.start(0, start, durationSec);
-  if (future && start + printDelay < decoded.duration) {
-    future.start(0, start + printDelay, durationSec);
-  }
-  const rendered = await renderWithAutomation(
-    ctx,
-    chain,
-    settings,
-    opts.timeline ?? EMPTY_TIMELINE,
-    start,
-    outSec,
-    speed,
-  );
-  opts.onProgress?.(1);
-  chain.dispose();
-  return rendered;
-}
-
-/**
- * Silence through the chain: the projector, the hiss of an empty track, the
- * hum. For stills and for clips with no decodable soundtrack.
- */
-async function renderSilent(
-  settings: Settings,
-  opts: OfflineAudioOptions,
-  sampleRate: number,
-): Promise<AudioBuffer | null> {
-  const durationSec = Math.max(0.1, opts.duration ?? 0);
-  const speed = playbackRate(rates(settings));
-  const outSec = durationSec / speed;
-  opts.onStage?.('rendering ambience');
-  const frames = Math.ceil(outSec * sampleRate);
   const ctx = new OfflineAudioContext(2, frames, sampleRate);
   const silence = ctx.createBufferSource();
-  silence.buffer = ctx.createBuffer(2, frames, sampleRate);
-  const chain = await buildChain(ctx, silence, settings, {
-    seed: opts.seed,
-    withAnalyser: false,
-    gateOnPause: false,
-  });
+  silence.buffer = ctx.createBuffer(2, Math.max(frames, 1), sampleRate);
+  const mix = ctx.createGain();
+  silence.connect(mix);
+
+  opts.onStage?.('building chain');
+  const chain = await buildChain(ctx, mix, settings, { seed: opts.seed, withAnalyser: false, gateOnPause: false });
   chain.output.connect(ctx.destination);
-  const start = opts.start ?? 0;
-  chain.sync(start, true);
+  chain.sync(outStart, true);
   silence.start(0);
-  const rendered = await renderWithAutomation(
-    ctx,
-    chain,
-    settings,
-    opts.timeline ?? EMPTY_TIMELINE,
-    start,
-    outSec,
-    speed,
-  );
+
+  if (decoded) {
+    // One source per shot, each placed on the tape where the shot is.
+    shots.atOutput(outEnd);
+    const list = shots.list;
+    for (let k = 0; k < list.length; k++) {
+      const s = list[k];
+      const next = list[k + 1];
+      const segOut0 = Math.max(s.out0, outStart);
+      const segOut1 = Math.min(next ? next.out0 : Infinity, outEnd);
+      if (segOut1 <= segOut0) continue;
+      const offset = s.src0 + (segOut0 - s.out0);
+      if (offset >= decoded.duration) continue;
+      const node = ctx.createBufferSource();
+      node.buffer = decoded;
+      node.connect(mix);
+      node.start(segOut0 - outStart, offset, Math.min(segOut1 - segOut0, decoded.duration - offset));
+    }
+  }
+
+  opts.onStage?.('rendering');
+  const timeline = opts.timeline ?? EMPTY_TIMELINE;
+  const settingsAt = (outT: number) => {
+    const srcT = shots.outToSrc(outT);
+    const active = countKeyframes(timeline) ? evaluateTimeline(settings, timeline, srcT) : settings;
+    const zv = countKeyframes(timeline)
+      ? zoomVelocityAt((t) => num(evaluateTimeline(settings, timeline, t), 'lens.zoom'), srcT)
+      : 0;
+    return { active, zv };
+  };
+  if (countKeyframes(timeline) > 0) {
+    const steps = Math.max(1, Math.ceil(outSec * AUTOMATION_HZ));
+    for (let i = 1; i < steps; i++) {
+      const at = i / AUTOMATION_HZ;
+      if (at >= outSec) break;
+      ctx.suspend(at).then(() => {
+        const { active, zv } = settingsAt(outStart + at);
+        chain.update(active, { time: outStart + at, playing: true, zoomVelocity: zv });
+        void ctx.resume();
+      });
+    }
+  }
+  const first = settingsAt(outStart);
+  chain.update(first.active, { time: outStart, playing: true, zoomVelocity: first.zv });
+  const rendered = await ctx.startRendering();
   opts.onProgress?.(1);
   chain.dispose();
   return rendered;

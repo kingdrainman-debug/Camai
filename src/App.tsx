@@ -27,7 +27,7 @@ import { Timeline } from './ui/Timeline';
 import { randomize, resetGroup } from './core/random';
 import { EMPTY_TELEMETRY, RenderTelemetry } from './video/renderer';
 import { BackendChoice, BackendKind, Renderer, createRenderer } from './video/backend';
-import { FilmAudioEngine } from './audio/engine';
+import { CamAudioEngine, zoomVelocityAt } from './audio/engine';
 import { GroupPanel } from './ui/GroupPanel';
 import { DEFAULT_EXPORT, ExportPanel, ExportSettings } from './ui/ExportPanel';
 import { encodeWav } from './export/wav';
@@ -36,10 +36,11 @@ import { startRecording } from './export/recorder';
 import { canvasToBlob, padIndex, seek, zipFrames } from './export/frames';
 import { desktop, isBatchMode, saveBlob } from './platform/desktop';
 import { frameAspect, outputSize, upscaleFactor } from './core/output';
-import { frameState, playbackRate, rates } from './film/clock';
+import { frameState, neededTaps, outFrameAt, rates, shotsFor, systemOf } from './cam/clock';
+import { num } from './core/params';
 import { Guide, shouldShowOnStartup } from './ui/Guide';
 
-type Tab = 'stock' | 'lens' | 'gate' | 'audio' | 'link';
+type Tab = 'camera' | 'tape' | 'display' | 'audio' | 'link';
 
 interface Media {
   url: string;
@@ -52,6 +53,9 @@ interface Media {
 
 const MAX_PREVIEW_PIXELS = 1920 * 1080;
 
+/** The preset the app opens on. */
+const FLAGSHIP = 'palmcorder-2002';
+
 interface ExportResult {
   ok: boolean;
   outputPath?: string;
@@ -59,10 +63,11 @@ interface ExportResult {
 }
 
 export default function App() {
-  // The app opens on the flagship — a Super 8 cartridge — rather than on the
-  // inert defaults, because the first thing anyone loads should look like film.
-  const [settings, setSettings] = useState<Settings>(() => ({ ...(PRESET_BY_ID['super8-1974']?.settings ?? DEFAULTS) }));
-  const [tab, setTab] = useState<Tab>('stock');
+  // The app opens on the flagship — a single-chip MiniDV palmcorder — rather
+  // than on the inert defaults, because the first thing anyone loads should
+  // look like a camcorder.
+  const [settings, setSettings] = useState<Settings>(() => ({ ...(PRESET_BY_ID[FLAGSHIP]?.settings ?? DEFAULTS) }));
+  const [tab, setTab] = useState<Tab>('camera');
   // Advanced parameters are shown by default. Hiding two thirds of a control
   // panel behind a tickbox makes the application look smaller than it is, and
   // people reasonably conclude a control does not exist rather than going
@@ -70,7 +75,7 @@ export default function App() {
   // can still have it, and that preference is remembered.
   const [advanced, setAdvanced] = useState(() => {
     try {
-      return localStorage.getItem('filmbox.hideAdvanced') !== '1';
+      return localStorage.getItem('camai.hideAdvanced') !== '1';
     } catch {
       return true;
     }
@@ -79,15 +84,15 @@ export default function App() {
   const chooseAdvanced = useCallback((show: boolean) => {
     setAdvanced(show);
     try {
-      if (show) localStorage.removeItem('filmbox.hideAdvanced');
-      else localStorage.setItem('filmbox.hideAdvanced', '1');
+      if (show) localStorage.removeItem('camai.hideAdvanced');
+      else localStorage.setItem('camai.hideAdvanced', '1');
     } catch {
       /* private window — the preference simply does not persist */
     }
   }, []);
   const [backendChoice, setBackendChoice] = useState<BackendChoice>(() => {
     try {
-      const v = localStorage.getItem('filmbox.backend');
+      const v = localStorage.getItem('camai.backend');
       return v === 'cpu' || v === 'gpu' ? v : 'auto';
     } catch {
       return 'auto';
@@ -100,7 +105,7 @@ export default function App() {
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => {
     const out: Record<string, boolean> = {};
     for (const g of GROUPS) {
-      out[g.id] = ['format', 'curve', 'grain', 'exposure', 'lens', 'camera', 'projector', 'audio', 'projnoise', 'link'].includes(g.id);
+      out[g.id] = ['format', 'operator', 'lens', 'exposure', 'sensor', 'interlace', 'codec', 'tape', 'osd', 'date', 'framing', 'audio', 'mech', 'link'].includes(g.id);
     }
     return out;
   });
@@ -122,7 +127,7 @@ export default function App() {
   const [stillPlaying, setStillPlaying] = useState(false);
   const [seed, setSeed] = useState(1337);
   const [randomAmount, setRandomAmount] = useState(0.6);
-  const [presetName, setPresetName] = useState('super8-1974');
+  const [presetName, setPresetName] = useState(FLAGSHIP);
   const [pasteText, setPasteText] = useState<string | null>(null);
   const [notice, setNotice] = useState('');
   const [glError, setGlError] = useState('');
@@ -137,7 +142,9 @@ export default function App() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
   const rendererRef = useRef<Renderer | null>(null);
-  const engineRef = useRef<FilmAudioEngine>(new FilmAudioEngine(seed));
+  const engineRef = useRef<CamAudioEngine>(new CamAudioEngine(seed));
+  /** Settings forced for the duration of an export (a DV file is rendered up to the codec). */
+  const exportOverrideRef = useRef<Settings | null>(null);
   const settingsRef = useRef(settings);
   const timelineRef = useRef(timeline);
   /** Settings after keyframes are applied — what the last frame actually used. */
@@ -206,8 +213,8 @@ export default function App() {
   const chooseBackend = useCallback((next: BackendChoice) => {
     setBackendChoice(next);
     try {
-      if (next === 'auto') localStorage.removeItem('filmbox.backend');
-      else localStorage.setItem('filmbox.backend', next);
+      if (next === 'auto') localStorage.removeItem('camai.backend');
+      else localStorage.setItem('camai.backend', next);
     } catch {
       /* private window — the choice simply does not persist */
     }
@@ -232,6 +239,7 @@ export default function App() {
 
     const src = rendererRef.current?.sourceSize ?? { width: 4, height: 3 };
     const aspect = frameAspect(settingsRef.current, src.width, src.height);
+    void src;
 
     let cssW = rect.width;
     let cssH = cssW / aspect;
@@ -274,13 +282,27 @@ export default function App() {
     fitCanvas,
     settings['framing.aspect'],
     settings['framing.overscan'],
-    settings['format.gauge'],
-    settings['anamorphic.enabled'],
-    settings['anamorphic.squeeze'],
+    settings['format.system'],
+    settings['format.aspect'],
     media,
   ]);
 
   /* ---------------- one render step ---------------- */
+
+  /**
+   * The settings in force at source time t: keyframes applied, engine masters
+   * folded down, and an export's overrides on top.
+   */
+  const activeAt = useCallback((t: number): Settings => {
+    const s = applyEngineMasters(evaluateTimeline(settingsRef.current, timelineRef.current, t));
+    return exportOverrideRef.current ? applyEngineMasters({ ...s, ...exportOverrideRef.current }) : s;
+  }, []);
+
+  /** How fast the zoom is moving at t: the motor's speed, and whether the zoom bar shows. */
+  const zoomVelocity = useCallback((t: number): number => {
+    if (!isAnimated(timelineRef.current, 'lens.zoom')) return 0;
+    return zoomVelocityAt((u) => num(evaluateTimeline(settingsRef.current, timelineRef.current, u), 'lens.zoom'), t);
+  }, []);
 
   /**
    * The source element and its size, whichever kind of media is loaded.
@@ -312,12 +334,11 @@ export default function App() {
   /**
    * Render one output frame.
    *
-   * The film only changes when a new film frame comes round, so the source is
-   * uploaded once per film frame and tagged with its number — that hold is
-   * what turns 30 fps video into 18 fps film. In the preview the frame is
-   * taken from wherever the video happens to be when its film frame begins;
-   * an export seeks to the exact moment each frame was exposed (see
-   * prepareFrames) before calling this.
+   * Each field is its own moment of the source, so the source is uploaded
+   * tagged with the moment it shows. In the preview the picture is taken from
+   * wherever the video happens to be, which is as close to the field's moment
+   * as a playing decoder gets; an export seeks to the exact moment of every
+   * field (see prepareFrames) before calling this.
    */
   const renderOnce = useCallback(
     (time: number, frame: number, dt: number, viaCanvas = false, outFrame?: number) => {
@@ -326,23 +347,14 @@ export default function App() {
 
       // Animated parameters are resolved here, once per frame, so the preview
       // and every export path see exactly the same values at the same time.
-      const active = applyEngineMasters(
-        evaluateTimeline(settingsRef.current, timelineRef.current, time),
-      );
+      const active = activeAt(time);
       activeSettingsRef.current = active;
 
       const src = currentSource(viaCanvas);
       if (src) {
-        const fs = frameState({
-          settings: active,
-          time,
-          outFrame,
-          seed: seedRef.current,
-          srcW: src.width,
-          srcH: src.height,
-        });
-        for (const field of fs.fields) {
-          if (!renderer.hasFrame(field.n)) renderer.setSource(src.el, src.width, src.height, field.n);
+        const fs = frameState({ settings: active, time, outFrame, seed: seedRef.current });
+        for (const tap of neededTaps(fs)) {
+          if (!renderer.hasFrame(tap.tag)) renderer.setSource(src.el, src.width, src.height, tap.tag);
         }
       }
 
@@ -355,15 +367,16 @@ export default function App() {
         audioLevel: levelRef.current,
         splitX: splitRef.current > 0.001 ? splitRef.current : -1,
         seed: seedRef.current,
+        zoomMoving: Math.abs(zoomVelocity(time)) > 0.01,
       });
     },
     [currentSource],
   );
 
   /**
-   * For an export: make sure the source of every film frame this output frame
-   * shows has been uploaded, seeking the video to the moment each was exposed.
-   * A pulldown frame shows two film frames, so it may need two seeks.
+   * For an export: make sure the source of every moment this output frame
+   * shows has been uploaded, seeking the video to each. Two fields are two
+   * moments; a slow shutter integrates several.
    */
   const prepareFrames = useCallback(
     async (outFrame: number, time: number) => {
@@ -372,24 +385,17 @@ export default function App() {
       if (!renderer) return;
       const src = currentSource(true);
       if (!src) return;
-      const active = applyEngineMasters(evaluateTimeline(settingsRef.current, timelineRef.current, time));
-      const fs = frameState({
-        settings: active,
-        time,
-        outFrame,
-        seed: seedRef.current,
-        srcW: src.width,
-        srcH: src.height,
-      });
-      for (const field of fs.fields) {
-        if (renderer.hasFrame(field.n)) continue;
+      const active = activeAt(time);
+      const fs = frameState({ settings: active, time, outFrame, seed: seedRef.current });
+      for (const tap of neededTaps(fs)) {
+        if (renderer.hasFrame(tap.tag)) continue;
         if (video) {
-          // A hair past the exposure time, so the seek lands inside the frame
-          // that was showing then rather than on the boundary before it.
-          await seek(video, Math.max(0, Math.min(video.duration || Infinity, field.capture + 0.002)));
+          // A hair past the moment, so the seek lands inside the frame that
+          // was showing then rather than on the boundary before it.
+          await seek(video, Math.max(0, Math.min(video.duration || Infinity, tap.srcT + 0.002)));
         }
         const now = currentSource(true);
-        if (now) renderer.setSource(now.el, now.width, now.height, field.n);
+        if (now) renderer.setSource(now.el, now.width, now.height, tap.tag);
       }
     },
     [currentSource],
@@ -417,6 +423,13 @@ export default function App() {
       let time: number;
       if (isVideo) {
         time = video.currentTime;
+        // A recording break skips part of the world: the camera was not
+        // recording, so the preview jumps the source past it as the tape does.
+        const at = shotsFor(activeSettingsRef.current, seedRef.current).srcToOut(time);
+        if (!at.recorded && !video.paused && at.resume < (video.duration || Infinity)) {
+          video.currentTime = at.resume;
+          time = at.resume;
+        }
       } else {
         // A still runs on a virtual transport so that what you scrub through
         // here is exactly what gets rendered, and keyframes have a playhead to
@@ -430,7 +443,7 @@ export default function App() {
         time = stillTimeRef.current;
       }
 
-      // A paused film is a still picture: every effect is a function of the
+      // A paused camera is a still picture: every effect is a function of the
       // frame number, so if nothing that feeds the render has changed, the
       // last frame drawn is already correct. Skipping it keeps a paused
       // window from burning a core.
@@ -463,7 +476,10 @@ export default function App() {
 
       const engine = engineRef.current;
       if (engine.ready) {
-        engine.update(activeSettingsRef.current, time, isVideo ? !video.paused : stillPlayingRef.current);
+        // The worklet keeps tape time, which runs behind source time by every
+        // stretch a recording break skipped.
+        const tape = shotsFor(activeSettingsRef.current, seedRef.current).srcToOut(time).out;
+        engine.update(activeSettingsRef.current, tape, isVideo ? !video.paused : stillPlayingRef.current, zoomVelocity(time));
         levelRef.current = engine.level();
       } else {
         levelRef.current = 0;
@@ -480,7 +496,7 @@ export default function App() {
 
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [media, renderOnce]);
+  }, [media, renderOnce, zoomVelocity]);
 
   const currentTimeRef = useRef(0);
   /** What the last drawn frame was drawn from, so an unchanged one is not redrawn. */
@@ -752,8 +768,8 @@ export default function App() {
     const blob = new Blob([serializePreset(settings, presetName || 'preset', timeline)], {
       type: 'application/json',
     });
-    const saved = await saveBlob(blob, `${presetName || 'filmbox'}.filmbox.json`, [
-      { name: 'FILMBOX preset', extensions: ['json'] },
+    const saved = await saveBlob(blob, `${presetName || 'camai'}.camai.json`, [
+      { name: 'CAMAI preset', extensions: ['json'] },
     ]);
     if (saved) setNotice(`Preset saved to ${saved}`);
   }, [settings, presetName, timeline]);
@@ -783,18 +799,8 @@ export default function App() {
     return { start: Math.max(0, start), end: Math.max(start + 0.01, end) };
   }, [exportSettings, duration, isStill]);
 
-  /** Camera, projector and output frame rates for the current settings. */
-  const filmRates = useMemo(() => rates(settings), [settings]);
-
-  // A projector running faster than the camera did runs the whole film
-  // faster — picture and sound. The decoder is told so, and told not to
-  // correct the pitch, because a projector would not have.
-  useEffect(() => {
-    const v = videoRef.current;
-    if (!v) return;
-    v.playbackRate = playbackRate(filmRates);
-    (v as HTMLVideoElement & { preservesPitch?: boolean }).preservesPitch = false;
-  }, [filmRates, media]);
+  /** DV, field and output rates for the current settings. */
+  const camRates = useMemo(() => rates(settings), [settings]);
 
   /**
    * The frame the current settings will produce. Shown in the export panel and
@@ -834,7 +840,7 @@ export default function App() {
       await desktop.writeFile(batchOutputRef.current, await blob.arrayBuffer());
       return batchOutputRef.current;
     }
-    const saved = await saveBlob(blob, `${baseName(media?.name)}-film.png`, [
+    const saved = await saveBlob(blob, `${baseName(media?.name)}-camai.png`, [
       { name: 'PNG image', extensions: ['png'] },
     ]);
     if (saved) setNotice(`Frame saved to ${saved}`);
@@ -852,7 +858,7 @@ export default function App() {
     setProgress(0);
 
     await seek(video, exportRange.start);
-    const recording = startRecording(canvas, engineRef.current.stream, { fps: filmRates.output });
+    const recording = startRecording(canvas, engineRef.current.stream, { fps: camRates.output });
     await video.play().catch(() => undefined);
     setPlaying(true);
 
@@ -879,13 +885,13 @@ export default function App() {
     abortRef.current = null;
 
     const ext = recording.mimeType.includes('mp4') ? 'mp4' : 'webm';
-    const saved = await saveBlob(blob, `${baseName(media?.name)}-film.${ext}`, [
+    const saved = await saveBlob(blob, `${baseName(media?.name)}-camai.${ext}`, [
       { name: 'Video', extensions: [ext] },
     ]);
     setBusy(false);
     setProgress(0);
     setStatus(saved ? `Saved to ${saved}` : 'Cancelled.');
-  }, [armAudio, exportRange, filmRates.output, media]);
+  }, [armAudio, exportRange, camRates.output, media]);
 
   const renderDeterministic = useCallback(async (): Promise<ExportResult> => {
     const canvas = canvasRef.current;
@@ -909,6 +915,29 @@ export default function App() {
     const wasPlaying = playing;
     videoRef.current?.pause();
     setPlaying(false);
+
+    // A DV file is rendered up to the codec — the camera, its interlace, and
+    // anything burned in — and FFmpeg's dvvideo encoder does the DV encoding.
+    // Tape errors and the display stages are playback, not recording, so
+    // they are not in the file.
+    const dvFile = exportSettings.format === 'dv';
+    if (dvFile) {
+      exportOverrideRef.current = {
+        'codec.enabled': false,
+        'chroma.enabled': false,
+        'tape.enabled': false,
+        'osd.enabled': settingsRef.current['osd.insert'] === 'precodec' ? settingsRef.current['osd.enabled'] : false,
+        'date.enabled': settingsRef.current['date.insert'] === 'precodec' ? settingsRef.current['date.enabled'] : false,
+        'capture.enabled': false,
+        'deint.enabled': false,
+        'upload.enabled': false,
+        'framing.overscan': true,
+        'framing.aspect': 'camera',
+        'framing.scaler': 'nearest',
+        'framing.fps': 'native',
+        'framing.dither': 0,
+      };
+    }
 
     try {
       // Take the dimensions from the decoder, not from whatever the renderer
@@ -934,8 +963,9 @@ export default function App() {
         exportSettings.customHeight,
         exportSettings.scale,
       );
-      const outW = out.width;
-      const outH = out.height;
+      const sysNow = systemOf(settingsRef.current);
+      const outW = dvFile ? sysNow.W : out.width;
+      const outH = dvFile ? sysNow.H : out.height;
       exportingRef.current = true;
       canvas.width = outW;
       canvas.height = outH;
@@ -977,7 +1007,7 @@ export default function App() {
           await desktop.writeFile(batchTarget, await wav.arrayBuffer());
           saved = batchTarget;
         } else {
-          saved = await saveBlob(wav, `${baseName(media?.name)}-film.wav`, [
+          saved = await saveBlob(wav, `${baseName(media?.name)}-camai.wav`, [
             { name: 'WAV audio', extensions: ['wav'] },
           ]);
         }
@@ -1003,42 +1033,45 @@ export default function App() {
           );
         }
       }
-      // The output runs on its own clock. Source time advances at the
-      // projection rate over the camera rate — faster when a silent film is
-      // run at sound speed — so the number of output frames follows from both.
-      const r = rates(settingsRef.current);
+      // The output runs on tape time. A recording break skips part of the
+      // source, so the tape is shorter than the clip; frames are counted on
+      // the tape and each is mapped back to the moment of the source it shows.
+      const exportSettingsNow = activeAt(exportRange.start);
+      const r = rates(exportSettingsNow);
       const fps = r.output;
-      const speed = playbackRate(r);
-      const firstOut = Math.round((exportRange.start / speed) * fps);
+      const shots = shotsFor(exportSettingsNow, seedRef.current);
+      const firstOut = outFrameAt(exportSettingsNow, seedRef.current, exportRange.start);
+      const lastOut = outFrameAt(exportSettingsNow, seedRef.current, exportRange.end);
       const dt = 1 / fps;
-      const total = Math.max(1, Math.round(((exportRange.end - exportRange.start) / speed) * fps));
+      const total = Math.max(1, lastOut - firstOut);
 
       renderer.resetHistory();
       await prepareFrames(firstOut, exportRange.start);
       renderOnce(exportRange.start, 0, dt, true, firstOut);
       if (!hasContent(canvas)) {
         throw new Error(
-          'the source decodes but the film pipeline rendered a blank frame. This is usually a GPU driver that cannot run the pipeline at the requested output size — try a smaller render scale, or use "Record in real time".',
+          'the source decodes but the camera pipeline rendered a blank frame. This is usually a GPU driver that cannot run the pipeline at the requested output size — try a smaller render scale, or use "Record in real time".',
         );
       }
 
-      // Every frame is a pure function of its number, so stepping through the
-      // clip by seeking produces exactly what playback would have. A still has
-      // nothing to seek; the clock still advances, so the film runs over it —
-      // new grain every frame, weave, flicker — rather than repeating.
+      // Frames are stepped in order from the first, so the automatics and the
+      // concealment, which have memory, see the same history every time and
+      // the export is reproducible. A still has nothing to seek; the clock
+      // still advances, so the camera keeps running over it.
       const stepTo = async (i: number) => {
         const k = firstOut + i;
-        const t = (k / fps) * speed;
+        const t = shots.outToSrc(k / fps);
         await prepareFrames(k, t);
         renderOnce(t, i, dt, true, k);
       };
 
       // ---- desktop: stream PNGs into ffmpeg ----
       if (desktop && exportSettings.format !== 'pngseq') {
-        const ext = exportSettings.format === 'prores' ? 'mov' : exportSettings.format === 'gif' ? 'gif' : 'mp4';
+        const ext =
+          exportSettings.format === 'prores' ? 'mov' : exportSettings.format === 'gif' ? 'gif' : exportSettings.format === 'dv' ? 'dv' : 'mp4';
         const target =
           batchOutputRef.current ??
-          (await desktop.chooseSavePath(`${baseName(media?.name)}-film.${ext}`, [
+          (await desktop.chooseSavePath(`${baseName(media?.name)}-camai.${ext}`, [
             { name: 'Video', extensions: [ext] },
           ]));
         if (!target) {
@@ -1048,8 +1081,11 @@ export default function App() {
         setStatus('Encoding…');
         if (batchOutputRef.current) console.info(`encoding ${total} frames at ${outW}x${outH} -> ${target}`);
         const session = await desktop.encodeStart({
-          format: exportSettings.format as 'h264' | 'hevc' | 'prores' | 'gif',
+          format: exportSettings.format as 'h264' | 'hevc' | 'prores' | 'dv' | 'gif',
           fps,
+          rate: sysNow.code === 0 ? (fps > 40 ? '60000/1001' : '30000/1001') : fps > 40 ? '50' : '25',
+          dvSystem: sysNow.code === 0 ? 'ntsc' : 'pal',
+          dvAspect: settingsRef.current['format.aspect'] === '16:9' ? '16:9' : '4:3',
           quality: exportSettings.quality,
           outputPath: target,
           width: outW,
@@ -1098,7 +1134,7 @@ export default function App() {
       setStatus('Packing…');
       const extra: { name: string; data: Uint8Array }[] = [
         {
-          name: 'settings.filmbox.json',
+          name: 'settings.camai.json',
           data: new TextEncoder().encode(
             serializePreset(settingsRef.current, presetName || undefined, timelineRef.current),
           ),
@@ -1114,7 +1150,7 @@ export default function App() {
         await desktop.writeFile(batchTarget, await zipBlob.arrayBuffer());
         saved = batchTarget;
       } else {
-        saved = await saveBlob(zipBlob, `${baseName(media?.name)}-film-frames.zip`, [
+        saved = await saveBlob(zipBlob, `${baseName(media?.name)}-camai-frames.zip`, [
           { name: 'Zip archive', extensions: ['zip'] },
         ]);
       }
@@ -1125,6 +1161,7 @@ export default function App() {
       setStatus(`Error: ${error}`);
       outcome = { ok: false, error };
     } finally {
+      exportOverrideRef.current = null;
       exportingRef.current = false;
       canvas.width = savedW;
       canvas.height = savedH;
@@ -1149,6 +1186,7 @@ export default function App() {
     prepareFrames,
     renderOnce,
     snapshot,
+    activeAt,
   ]);
 
   // Assigned on every render, so the batch handler always invokes the newest
@@ -1174,13 +1212,10 @@ export default function App() {
           : { ...DEFAULTS };
         if (job.settings) next = sanitize((job.settings as { settings?: unknown }).settings ?? job.settings, next);
         if (job.params) next = sanitize(job.params, next);
-        // --fps picks the output rate, which is a parameter here because it
-        // changes the picture: it decides the cadence.
+        // --fps picks the output rate: one frame per DV frame, or one per
+        // field (59.94 or 50), which is what bob deinterlacing wants.
         if (typeof job.fps === 'number') {
-          const match = ['23.976', '24', '25', '29.97', '30', '50', '59.94'].find(
-            (v) => Math.abs(Number(v) - job.fps!) < 0.02,
-          );
-          if (match) next = { ...next, 'framing.fps': match };
+          next = { ...next, 'framing.fps': job.fps > 40 ? 'field' : 'native' };
         }
         setSettings(next);
         settingsRef.current = next;
@@ -1286,7 +1321,7 @@ export default function App() {
   if (glError) {
     return (
       <div className="fatal">
-        <h1>FILMBOX</h1>
+        <h1>CAMAI</h1>
         <p>{glError}</p>
       </div>
     );
@@ -1296,9 +1331,9 @@ export default function App() {
     <div className={`app${isBatchMode ? ' batch' : ''}`}>
       <header className="topbar">
         <div className="brand">
-          <span className="logo">▤</span>
-          <span className="name">FILMBOX</span>
-          <span className="tagline">film stock and format emulation for picture and sound</span>
+          <span className="logo">●</span>
+          <span className="name">CAMAI</span>
+          <span className="tagline">camcorder emulation for picture and sound</span>
         </div>
 
         <div className="topbar-actions">
@@ -1402,7 +1437,7 @@ export default function App() {
           <button
             className="guide-btn"
             onClick={() => setGuideOpen(true)}
-            title="How to load footage, what the reference films are, and how to build a look (F1)"
+            title="How to load footage, what the reference cameras are, and how to build a look (F1)"
           >
             Guide
           </button>
@@ -1414,10 +1449,10 @@ export default function App() {
           <nav className="tabs">
             {(
               [
-                ['stock', 'Stock', 'The emulsion: its curve, grain, halation and dyes, the print, and how it has aged', 'engine.stock'],
-                ['lens', 'Lens', 'Exposure and the lens: how much light, of what colour, and how sharply', 'engine.lens'],
-                ['gate', 'Gate', 'The machinery: camera and projector transport, dirt, scratches, splices, leaks, decay and the transfer', 'engine.gate'],
-                ['audio', 'Sound', 'The soundtrack, the projector’s sound head and amplifier, and the machine itself in the room', null],
+                ['camera', 'Camera', 'The operator, the lens, the sensor, the automatics and the DSP', 'engine.camera'],
+                ['tape', 'Tape', 'Interlace, chroma subsampling, the DV codec, tape errors and recording breaks', 'engine.tape'],
+                ['display', 'Display', 'The camera’s display and date, the capture, deinterlacing, the web upload and the output', 'engine.display'],
+                ['audio', 'Sound', 'The microphone on the body, the camera’s own noises, the automatic gain and DV audio', null],
                 ['link', 'A/V Link', 'What ties the picture and the sound together', null],
               ] as [Tab, string, string, string | null][]
             ).map(([t, label, title, masterKey]) => {
@@ -1521,8 +1556,8 @@ export default function App() {
                 onLoadedData={(e) => {
                   lastDrawn.current.time = -1;
                   // A video that has loaded but never played may not have
-                  // *presented* a frame, so the film would sit black until the
-                  // user pressed play. A nudge off zero forces one out.
+                  // *presented* a frame, so the picture would sit black until
+                  // the user pressed play. A nudge off zero forces one out.
                   const v = e.currentTarget;
                   if (v.paused && v.currentTime === 0) {
                     v.currentTime = Math.min(0.04, (v.duration || 1) * 0.01);
@@ -1531,13 +1566,11 @@ export default function App() {
                 onPlay={() => setPlaying(true)}
                 onPause={() => setPlaying(false)}
                 onSeeked={() => {
-                  // The film frame shown is held until the next one comes
-                  // round, so after a scrub the frame held must be thrown
-                  // away — it is from the old position — and taken again now
-                  // that the decoder has the new one. An export steps by
-                  // seeking and uploads every frame itself, so it is left
-                  // alone: dropping its frames between upload and render
-                  // would show the wrong one.
+                  // After a scrub the source frames held are from the old
+                  // position and must go, along with the automatics' state.
+                  // An export steps by seeking and uploads every field
+                  // itself, so it is left alone: dropping its frames between
+                  // upload and render would show the wrong one.
                   if (exportingRef.current) return;
                   rendererRef.current?.resetHistory();
                   lastDrawn.current.time = -1;
@@ -1664,8 +1697,8 @@ export default function App() {
               status={status}
               outputSize={previewOutput}
               upscale={previewUpscale}
-              fps={filmRates.output}
-              filmFps={filmRates.projector}
+              fps={camRates.output}
+              dvFps={camRates.dv}
               onChange={setExportSettings}
               onRenderDeterministic={renderDeterministic}
               onRecordRealtime={recordRealtime}
@@ -1696,7 +1729,7 @@ export default function App() {
               value={pasteText}
               onChange={(e) => setPasteText(e.target.value)}
               spellCheck={false}
-              placeholder='{"format.stock": "ektachrome160", "fade.years": 40}'
+              placeholder='{"format.sensor": "ccd3", "lens.adapter": "fisheye"}'
             />
             <div className="row">
               <button className="primary" onClick={() => applyPasted(pasteText)}>
@@ -1727,7 +1760,7 @@ function formatTime(t: number): string {
 }
 
 function baseName(name?: string): string {
-  return (name ?? 'filmbox').replace(/\.[^.]+$/, '');
+  return (name ?? 'camai').replace(/\.[^.]+$/, '');
 }
 
 /** Offline audio rendering is bounded so a stalled decoder cannot hang an export. */

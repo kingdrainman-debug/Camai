@@ -2,9 +2,9 @@
  * Explanatory text for the interface.
  *
  * This lives apart from the schema on purpose. `params.ts` is a machine-read
- * description of ~200 controls — ranges, defaults, types — and burying several
- * paragraphs of prose in each entry would make the thing nobody can skim. Here
- * the prose can be written as prose.
+ * description of nearly two hundred controls — ranges, defaults, types — and
+ * burying several paragraphs of prose in each entry would make the thing
+ * nobody can skim. Here the prose can be written as prose.
  *
  * Two levels:
  *
@@ -31,376 +31,374 @@ export interface SectionHelp {
 
 export const SECTION_HELP: Record<string, SectionHelp> = {
   engine: {
-    what: 'A master switch for each of the three engines. Stock is the emulsion — its curve, grain, halation, dyes, the print and its fading. Lens is everything before the light reaches the film. Gate is the machinery: camera and projector transport, dirt, scratches, splices, leaks, decay and the telecine.',
-    how: 'Use them to find out where something is coming from. If a colour cast survives switching the Stock engine off it is the light or the lens; if a wobble survives switching the Gate off it is not the gate. They are also the quickest route to useful half-looks: a perfect stock in a terrible camera, or a ruined stock in a perfect one.',
+    what: 'A master switch for each of the three engines. Camera is everything up to the picture leaving the camera’s DSP: the operator, the lens, the sensor, the automatics and the sharpening. Tape is what DV does to it: interlace, chroma subsampling, the codec, dropouts and recording breaks. Display is how it was finally watched: overlays, capture, deinterlacing, the web upload.',
+    how: 'Use them to find out where something comes from. If blocks survive switching the Tape engine off they are not the codec — they are the digital zoom or the upload. If a halo survives switching the Camera off, it is the capture card’s sharpening. The Format section belongs to no engine: it says which machine this is, and every engine reads it.',
   },
   format: {
-    what: 'The gauge and the emulsion. The gauge is millimetres of film — the size of the frame, the pitch between frames, where the perforations are — and almost everything else is derived from it: grain is enlarged more from a small frame, halation is a fixed distance on the film, registration error is measured in micrometres of strip.',
-    how: 'Choose these two first and judge everything else afterwards. The same stock on Super 8 and on 35 mm is two different pictures, and that difference is not something you should have to dial in twice — so it is not exposed twice. Camera speed sets how often the picture changes; Super 8 at 18 fps is half the reason Super 8 looks like itself.',
+    what: 'Which machine this is: the television system (raster, field rate, chroma subsampling), the tape, the kind of sensor and its size, and the camera’s 4:3 or 16:9 mode. These are not effects to dial in; they are the facts every other section is derived from.',
+    how: 'Choose them first. 525/60 gives 4:1:1 colour that smears sideways; 625/50 gives 4:2:0 that smears down. A single complementary CCD is the cheap palmcorder; three CCDs the prosumer camera; CMOS is 2006 onwards. A smaller sensor needs more gain and is noisier and softer at small apertures.',
   },
-  curve: {
-    what: 'The characteristic curve: the density the film develops to against the logarithm of the exposure it received. A toe where the shadows compress, a long straight line, and a shoulder where highlights roll off. This curve — not grain — is why film looks like film: a highlight that would clip hard on a sensor bends over gently instead.',
-    how: 'Every stock has its own curve, and these controls are offsets from it, so changing stock still matters. Reversal stocks clip highlights early and hard because their curve has to span their whole density range; negatives hold eight stops above grey. Push/pull is the lab control: rating the film faster and developing longer, with all the consequences at once.',
-  },
-  grain: {
-    what: 'Silver crystals and dye clouds, in three emulsion layers with independent grain, clumped rather than white, and fixed to the film. Its amplitude follows Selwyn’s law from the stock’s published RMS granularity, so it scales with the format: a smaller frame is enlarged more, and the same emulsion is several times grainier on Super 8 than on 35 mm.',
-    how: 'Leave Amount at 1 to get what the data sheet says, and change the stock or the gauge rather than the slider when you want a different grain — that is how real grain changes. Grain power follows density, so it sits in the shadows of a negative and the midtones of the print. It is on the film: the projector’s weave carries it, the camera’s does not.',
-  },
-  halation: {
-    what: 'Light passes through the emulsion, reflects off the back of the film base, and re-exposes the emulsion from behind in a ring round anything bright. The red-sensitive layer is nearest the base, so the halo is red-orange. The radius is set by the thickness of the base, which makes it a much larger fraction of a small frame.',
-    how: 'Most stocks have an anti-halation backing and halate only a little; the effect is strongest round practical lights and specular highlights in the dark. Backing removed is the dramatic version. Green reach decides between a red halo and an orange one. Because halation is exposure, it goes through the curve: on reversal it is crisp, on a negative it is soft.',
-  },
-  dye: {
-    what: 'The dyes the three layers form, and their effect on one another. Interimage effects — each layer’s development restraining its neighbours’ — push colours apart and give film its separation. Unwanted absorptions in imperfect dyes pull them back together and make colours muddy.',
-    how: 'These are subtle and best left near 1. Interimage at 0 is a film whose layers ignore each other: correct but flat. Raise impurity to imitate older, cheaper dye sets; lower it for the purity of dye transfer. The dyes’ ageing is a separate section, Dye Fading.',
-  },
-  print: {
-    what: 'What happened to a negative: it was printed. The print stock has its own, much steeper curve, and the combination of negative and print — not either alone — produces the look. Printer lights are set as a real laboratory sets them: by printing a grey card on the negative to the print’s aim density, then offsetting in printer points.',
-    how: 'Process decides the route. A contact print has the print’s soft highlight roll-off and deep blacks; a scanned negative has all the negative’s latitude and looks flatter; the negative itself is orange and inverted, and is there to look at. Printer lights correct or create casts, 25 being nominal. Duplicate generations are how a fourth-generation release print got its contrast and grain.',
-  },
-  fade: {
-    what: 'Chromogenic dyes decay, each at its own rate, and the rates depend on the dye set and the storage temperature. Eastman Color Print 5381’s cyan and yellow dyes faded fast at room temperature while its magenta held, which is why so many prints of the 1970s are now pink. Not a desaturation: a specific, recognisable shift.',
-    how: 'Set the age and the storage; the stock supplies the rates, so the same thirty years turns 5381 pink and leaves Kodachrome nearly untouched. Storage matters more than age — a cold vault slows fading by a factor of twenty. The per-dye rate controls are for imitating a particular faded print rather than a stock.',
-  },
-  exposure: {
-    what: 'How much light reached the film, and what colour it was. Exposure is relative to what the meter asked for. The scene light is weighed against the colour temperature the stock is balanced for, which is how tungsten film shot outdoors goes blue, and daylight film indoors goes orange.',
-    how: 'Exposure is where the curve’s character shows: underexpose reversal and its shadows block up; overexpose it and its highlights clip; a negative shrugs off both. The 85 filter is the orange conversion filter Super 8 cameras carried on a switch — leave it in indoors and everything turns amber. Source headroom decides how much highlight the source is assumed to have clipped.',
+  operator: {
+    what: 'The person holding the camera, who is not a camera operator. Hand tremor at 8–12 Hz, the slow sway of unbraced arms, the bob and roll of walking, a hand shifting its grip, whip pans, and wherever they are deliberately pointing. All of it is camera rotation, so the zoom magnifies it, exactly as it did.',
+    how: 'Leave tremor and sway near their defaults for anything handheld; they are small and they are always there. Add walking for anything shot on the move. Bumps are the jolt of a grip changing, and each is a thump in the sound too. Keyframe Pan and Tilt for a deliberate move; the stabiliser treats it as shake at first, which is how real stabilisers behaved.',
   },
   lens: {
-    what: 'The lens, specified as it would be on a bench: resolving power in line pairs per millimetre of film, corner falloff, vignetting in stops, lateral chromatic aberration in micrometres at the corner, distortion, and veiling flare. Because these are measured on the film, the same lens takes a larger bite out of a small frame.',
-    how: 'Super 8 cameras had small, slow zooms: 25–40 lp/mm, soft corners, a stop of vignetting, visible colour fringes, and enough flare to lift the blacks. A good 35 mm prime is 80–120 lp/mm with almost none of that. Veiling flare is the most underrated control here: a few percent of it is what takes the digital edge off the shadows.',
+    what: 'A small, slow 10× to 25× zoom on a fingernail-sized sensor: soft in the corners, vignetting at the wide end, lateral colour at the long end, flaring easily — and, screwed onto the front, a wide-angle or fisheye converter. The zoom is an animatable parameter: the picture follows it, the shake is magnified by it, and the motor is heard while it moves.',
+    how: 'Keyframe Zoom for the slow push in on the birthday cake. Past the optical range, the Digital Zoom section takes over if it is enabled. The source is treated as the camera’s widest view; zooming in enlarges part of it. The fisheye adapter with a three-chip camera is the skate-video look. There is no shallow depth of field here, and there should not be: everything was in focus.',
   },
-  anamorphic: {
-    what: 'A cylindrical lens squeezing a wide picture onto ordinary film, unsqueezed again in projection. The film itself is untouched by the squeeze, so the grain and everything else on the film are stretched sideways on the screen, the lens’s blur is oval, and bright sources throw a horizontal streak across the frame.',
-    how: 'Squeeze 2 with the Scope aspect is CinemaScope. The streak is the famous one: keep it subtle and tinted blue, raise the threshold so only real light sources streak. Notice the grain: it is wider than it is tall, because it was on the film before the projector stretched it.',
+  exposure: {
+    what: 'How much light the world had, and the automatic camera chasing it. The iris, the electronic shutter and the gain are steered together, with lag: in sun the camera raises the shutter speed rather than stop down into diffraction, which is why daylight camcorder footage is so crisp and so jittery; in the dark it opens up and then adds gain, up to about +18 dB.',
+    how: 'Set Scene light for where you are — about 0 indoors at night, 6 under cloud, 10 in sun — and leave the mode automatic. Keyframe Scene light from a room into daylight and the picture blows out, then pumps down over a second or so; Damping below 1 makes it overshoot. Backlight compensation opens up for a subject against a window and burns the window out.',
   },
-  camera: {
-    what: 'The camera’s intermittent movement: a claw pulls the film down a frame and holds it while the shutter opens. Registration error moves the image relative to the film — under the grain, which stays put. The shutter and a spring or battery motor that does not hold speed vary the exposure from frame to frame.',
-    how: 'Super 8’s plastic pressure plate gives 20–40 µm of registration error; a pin-registered 35 mm camera, a few. Frame jitter is the share that changes every frame — the twitch — against the slow wander. Speed drift is the spring-wound camera running down: longer, brighter frames, and motion that speeds up on projection. Camera starts burn a flash frame or two at the head of every shot.',
+  sensor: {
+    what: 'The chip. Each photosite collects charge through its colour filter and stops at its full well; what overflows blooms into its neighbours. On an interline-transfer CCD light also leaks into the vertical registers during readout, so a bright point draws a stripe the full height of the frame: smear. CMOS does not smear; it reads out row by row instead. Then read noise and photon noise, before the gain.',
+    how: 'The defaults are a mid-range consumer CCD. Smear is relative to a 1/60 s shutter and grows as the shutter gets faster, so it is strongest in sun — exactly where the bright points are. Headroom decides how far beyond its own white the source’s clipped highlights are taken to be. Filter overlap is the complementary mosaic’s muddy colour; turn it down for cleaner colour.',
   },
-  projector: {
-    what: 'The machine the film runs through to be seen: a projector, or a telecine. Its gate weave moves the whole strip, so picture, grain and dirt move together. Its shutter interrupts the light two or three times a frame, which beats against a camera filming the screen. Its lamp has a hot spot, a colour, and — on AC — a ripple.',
-    how: 'For a clean transfer leave the shutter at none. For the look of film filmed off a wall, use a three-blade shutter with a short capture shutter: the beat between the blade rate and the capture rate is the shimmer. Film buckle is the focus breathing as the frame heats and bows. Projection speed is how silent film ended up running too fast for half a century.',
+  focus: {
+    what: 'Contrast-detection autofocus: the camera racks the focus back and forth looking for maximum contrast. It hunts — breathes in and out — when the subject changes, when the light falls, and at the start of every shot, and it can lock onto the background behind a near subject.',
+    how: 'Hunting sets how often it loses focus on its own; every recording break adds a hunt at the start of the shot as well. Hunt depth is how far it goes out. Missed focus is a constant error, the background-locked look. Each hunt is heard as the focus motor ticking, through the A/V Link.',
   },
-  gatedirt: {
-    what: 'Grit and hair lodged in the gate itself. The film runs past it, so it does not move with the picture or with the weave: it sits still on the screen for seconds at a time, until it is dislodged. A hair at the edge of the aperture flutters as each frame is pulled past it.',
-    how: 'This is the kind of dirt most emulations forget. One hair at the edge of frame, now and then, sells "projected film" faster than a screen full of specks. Keep Specks low; grit in a gate collects at the edges. Lifetime decides how long each one stays.',
+  wb: {
+    what: 'The light the scene was lit by, and the camera’s attempt to make it white. Consumer automatic white balance averaged the whole frame, drifted slowly, and was wrong in recognisable ways: it corrected only part of the way towards tungsten, leaving it orange, and hardly at all along green–magenta, leaving fluorescent tubes green. Because it averages the frame, it shifts when a coloured object fills it.',
+    how: 'Set Light to what the scene was lit by. Automatic follows slowly and stops short; Correction range is how far it gets. The indoor and outdoor presets are what a careful owner would have used. Held keeps whatever the camera had settled on when the clip began, which is right for a locked-off shot.',
   },
-  filmdirt: {
-    what: 'Dust and lint on the film. Every frame is a different piece of film carrying different dirt, so it lasts exactly one frame. On a print it is opaque and shows black; dirt that was on the negative when it was printed held back the printer light, so it shows white. Reversal has no negative: its dirt is always black.',
-    how: 'Dust is the per-frame sparkle; fibres are the curled bits of lint. On the negative is the share that prints white — a print from a dirty negative sparkles, and that sparkle is a very different texture from black dust. Size is physical: a speck covers more of a smaller frame.',
+  eis: {
+    what: 'Electronic image stabilisation: the sensor is read out as a crop with a margin, and the crop moves each field against the shake. The view is narrower and slightly softer. Most tellingly, the frame stays steady while the motion blur in it does not, because blur cannot be stabilised after the fact.',
+    how: 'Use with an Operator. Strength is how much of the fast part of the shake is cancelled; slow drift and deliberate pans are left alone, after a lag in which the stabiliser fights them. A larger margin can correct bigger shakes but costs more of the view.',
   },
-  scratch: {
-    what: 'A piece of grit in a gate draws a line along the film as it runs, and keeps drawing it for as long as it stays there, so a scratch persists across seconds of picture at the same place on the film. An emulsion scratch removes dye, top layer first; a base scratch scatters the light that crosses it. Which film it was made on decides which way round that reads.',
-    how: 'On a print an emulsion scratch is bright and, if shallow, coloured — it has taken only the top dye layer — while a base scratch is dark and soft. On the negative both reverse: an emulsion scratch prints dark, a base scratch prints bright. Depth decides how coloured emulsion scratches are; Wander lets them drift with the strip.',
+  dzoom: {
+    what: 'Digital zoom: once the lens is at its longest, the camera keeps going by enlarging a shrinking crop of the sensor — the “500×” on the box. The upscale is coarse, so the picture turns to blocks of sensor pixels, and the display shows the digital magnification beyond the zoom bar.',
+    how: 'Enable it and push Zoom past the optical range in the Lens section. Pixel repeat is the cheap camera’s blocky look; linear interpolation is softer. It happens in the camera, before the codec, so the codec then codes those enlarged pixels.',
   },
-  splice: {
-    what: 'Joins in the film. A splice jumps the picture as it goes through the gate, flashes as the join passes, and leaves the tape’s edges or the cement line visible. Cue marks are the circles a projectionist watched for in the top right corner: eight seconds before the end of a reel to start the second projector’s motor, one second before to change over.',
-    how: 'A splice every minute or two is an edited home movie; several a minute is a well-worn print. Tape splices are hazy for a frame either side; cement splices are a thin line. With A/V Link on, every splice pops in the soundtrack as well. Set Reel length to the clip length to put cue marks at the end of your clip.',
+  tone: {
+    what: 'Video’s tone curve, the opposite of film’s. A gamma of about 0.45 with a linear toe, then a knee that compresses the top of the range, then a hard clip. Perhaps five or six stops of usable range. DV codes up to about 109 IRE, and consumer cameras used the headroom: superwhites above reference white.',
+    how: 'Knee point and slope set how much highlight detail survives; a low knee and a shallow slope hold more sky before the wall. The clip is in IRE; at 100 the superwhites are gone. On a single-chip camera the channels clip at different points, so a blown sky goes cyan or yellow at its edge before it goes white — that comes from the Sensor section, not from here.',
   },
-  leak: {
-    what: 'Light reaching the film where it should not: a leak at the side of a camera or cartridge, fog piped along the perforated edge, and the first and last frames of a load fogged while it was loaded and unloaded. It is exposure, so it goes through the curve — and because it crosses the base before it reaches the emulsion, it hits the red layer first and comes out orange.',
-    how: 'Roll-end fog is the most authentic of these: Super 8 cartridges fogged at both ends every time, and the opening seconds of almost every home movie are washed out in orange. The roll length comes from the gauge — 3,600 frames for a Super 8 cartridge. Keep the leak itself occasional; constant leaking reads as a filter.',
+  detail: {
+    what: 'Aperture correction, the early-2000s sharpness. A peaking filter adds an overshoot to every edge — a bright fringe on the light side and a dark one on the dark side — horizontally along the line and vertically across the lines of one field. Coring leaves low-level noise alone; a limiter caps the halo. It happens before the codec, and halos are expensive to code, so the codec then rings around them.',
+    how: 'Gain is the strength; Frequency is the halo’s width in DV pixels. Raise Coring if gain-up noise is being sharpened into grit. The vertical share acting within a field is why sharpened DV twitters on horizontal edges. This is not an unsharp mask turned to 11; turned to 11 it looks like one.',
   },
-  decay: {
-    what: 'Film kept badly. Acetate base breaks down — vinegar syndrome — and shrinks unevenly, warping the frame; the emulsion, unable to shrink with it, lifts in ridges along the film. Mould eats the gelatin in soft colonies. Water dries in tide lines. In places the emulsion flakes off entirely.',
-    how: 'All of these are on the film, so they weave with it, and they change slowly along a reel rather than frame by frame. Use them sparingly and together: a little vinegar warp with a little channelling and a mould colony or two reads as a film found in a loft; any one of them at full strength reads as an effect.',
+  battery: {
+    what: 'The battery drains as the camera records — and, more slowly, in standby between shots. The display’s gauge follows it and blinks when it is nearly empty. When it runs out the camera stops recording: a cut, not a fade, and after it the tape holds nothing.',
+    how: 'Set the charge it started at and its capacity. Short of capacity is the camera that dies halfway through the cake. The display needs the Camera Display section on to show the gauge.',
   },
-  telecine: {
-    what: 'Turning projected film into video. Pulldown builds each video frame from two fields, which on mixed frames come from different film frames: the 3:2 cadence of 24 fps film on 29.97 fps video, with its judder and its combing. The transfer’s tone maps the print’s aim density to mid grey and clear film to white.',
-    how: 'Turn on interlaced pulldown with an output rate of 29.97 for the look of film broadcast on NTSC television. Mid grey and White are the colourist’s two anchors; Black lift is flare in the transfer, the milky blacks of an old telecine. Black is otherwise set on the film’s own unexposed density, as a colourist would.',
+  night: {
+    what: 'An infrared night mode: the IR-cut filter swings out of the light path and an infrared LED beside the lens lights the scene. A colour sensor seeing only infrared sees it equally through every filter, so the picture is near monochrome, given a greenish cast; the lamp makes a hot spot in the middle that falls away to black; eyes retro-reflect and glow; and some fabrics go translucent.',
+    how: 'Pair it with a dark scene (Scene light around −4), a slow shutter and the gain at its limit. IR lamp is the beam’s strength; Hot spot its width. Found-footage horror lives in this mode. The trademarked names for it belonged to camera makers; this is the thing itself.',
+  },
+  fx: {
+    what: 'The effects button: sepia, black and white, “old movie”, mosaic, strobe, trail and negative, as the camera’s DSP and field memory did them, and the fader that faded each shot in from black or white when REC was pressed.',
+    how: 'Small, well known and cheap; they ship off. The fader fades the sound in with the picture, as the cameras did. Strobe holds frames in the field memory; trail mixes in the frame before.',
+  },
+  interlace: {
+    what: 'Fields. The CCD delivers 59.94 or 50 a second, each its own moment, and DV puts two in a frame, bottom field first. In field integration mode adjacent sensor rows are summed in pairs, the pairing alternating between the fields, so each field has less vertical resolution than half a frame and the two fields sample different row pairs.',
+    how: 'Leave it on: it is the video motion. Off records progressive frames, both fields from one moment, which a DV camcorder did not do. Field integration off is frame integration, sharper vertically; the complementary mosaic always sums its pairs, because it needs them to decode colour.',
+  },
+  chroma: {
+    what: 'Chroma subsampling. DV keeps full-resolution luma and much less colour: 4:1:1 in 525/60, a quarter of the horizontal colour resolution; 4:2:0 in 625/50, half horizontally and half vertically, averaged across the two fields. Red text and red edges smear sideways in one and down in the other.',
+    how: 'It is always on while the DV codec is, because it is part of DV. Off with the codec off shows the camera’s full-resolution colour. The decoder’s upsampling is the playback side’s choice: repeat gives hard colour steps every four pixels, interpolation a softer bleed.',
+  },
+  codec: {
+    what: 'The DV codec: intra-frame 8×8 DCT at a constant 25 Mbit/s. Blocks choose an 8-8 or a 2-4-8 transform; are sorted into four classes by activity; and each segment of five macroblocks — shuffled from five places across the frame — gets the finest quantiser at which it fits a fixed number of bits. When even the coarsest does not fit, the highest frequencies are lost.',
+    how: 'The budget is fixed, so quality is whatever is left after the picture has paid for its detail: a busy, noisy, gained-up frame blocks everywhere at once, including where the noise is not. Bit budget scales the 25 Mbit/s; below 1 is a starved encoder. The rate control is an approximation calibrated against FFmpeg’s dvvideo encoder; the README gives the figures.',
+  },
+  tape: {
+    what: 'Tape errors, digital ones. A damaged stretch of tape loses DIF blocks from a run of tracks, and the decoder conceals the loss macroblock by macroblock — from the previous frame, or as grey or green blocks — on the macroblock grid, scattered across the picture by the shuffle. At worst a whole frame freezes and the audio mutes. A clogged head freezes and mosaics everything until it cleans itself.',
+    how: 'Dropouts and size together set how damaged the tape is; LP multiplies the rate. It is never a horizontal streak: that is VHS. The audio is on the same tracks, so the sound mutes or stutters at the same moment through the A/V Link.',
+  },
+  breaks: {
+    what: 'Recording breaks. Each press of REC starts a new shot. A DV camera backs the tape up slightly before recording, so the cut is seamless and the timecode continuous. Time passed between shots, so the camera’s clock jumps; the tape is continuous, so the counter does not. Each break is a cut in the picture, a REC-button clunk and a dead cut in the sound.',
+    how: 'Shots per minute sets how often the camera was stopped. Source skipped is how much of the world went unrecorded at each break, which is what makes the cut visible as a jump. Turn off the backspace to get the garbage frame and the restarted timecode of recording over an unrecorded gap.',
+  },
+  osd: {
+    what: 'The viewfinder and LCD display: REC or STBY with its red dot, the counter, the battery, the zoom bar, the mode readout and blinking warnings. None of it was ever recorded to DV tape. Footage “with the REC overlay” is the AV output recorded with the display on, a screen filmed by another camera, or a later imitation.',
+    how: 'Path is where it enters the chain, and the chain then does to it what it does. After decode (the default, the AV output) it is crisp over blocky picture, and softens with any analogue capture after it. Burned in before the codec it rings and bleeds with the picture — the imitation. On the display it is sharp on the output’s own pixels.',
+  },
+  date: {
+    what: 'The date and time, as a model rather than a string: wall-clock time that advances while recording and jumps at every recording break by the time that passed between shots. Many analogue cameras imprinted it into the picture before recording; DV recorded it as data and drew it at playback when the data-code display was on.',
+    how: 'Set the date and time of the first shot and the regional format. The path works as the camera display’s does: after decode for DV’s data code, before the codec for an imprint. A camera whose clock was never set shows its factory default instead.',
+  },
+  capture: {
+    what: 'How the tape got into a computer. FireWire copied the DV stream bit for bit. A cheap capture card took the camera’s S-Video or composite output instead, and composite put the colour on a subcarrier in the luma band that the card then had to take out again: dot crawl, cross-colour on fine detail, a softer picture, colour arriving late — with every overlay on the AV output degraded along with it.',
+    how: 'FireWire is identity. Composite with a notch decoder is the cheapest card; the comb is sharper but fringes on vertical colour edges. Levels decides whether superwhites clip or the whole coding range is shown. Adapted from CRTBOX’s composite chain, at the DV raster’s sampling rate.',
+  },
+  deint: {
+    what: 'Deinterlacing, chosen by whatever played or converted the footage. Weave keeps both fields and combs on anything that moves. Bob shows each field on its own, line-doubled: no combing, but thin lines twitter. Blend averages the fields: motion ghosts. Discard throws a field away: half the vertical resolution, the early web look.',
+    how: 'With the section off the output is a weave of the full frame. For bob at its best set Output rate to field rate, and every field becomes a frame. A CRT showed fields in sequence and was smooth; for that, hand the footage to CRTBOX rather than looking for it here.',
+  },
+  upload: {
+    what: 'The 2006 web upload: one field discarded, the picture scaled down to around 320 × 240, the frame rate cut to 15 or so, and a second lossy codec on top of DV’s. A found tape captured badly and re-encoded is a chain of generations, and each has its own loss.',
+    how: 'Width sets the upload’s raster; the frame rate holds frames, so motion stutters; Quantiser is the second codec’s step size, bigger being blockier, with blocks eight pixels on the small raster — far bigger than DV’s on the screen.',
   },
   framing: {
-    what: 'The shape and frame rate of what comes out. The aspect is the projected picture’s shape, cropped out of the camera aperture; the export file is exactly that shape. Overscan widens the window beyond the gate to show the frame edge, frame lines, the next frame, perforations and the edge of the strip, as a scanner with an oversized gate does.',
-    how: 'Full camera gate is the format’s own shape. Positive overscan is the fashionable "sprocket holes" look — and here the perforations sit where they do on the real gauge. Output rate is where the cadence comes from: anything other than the film rate means some film frames are held longer than others.',
+    what: 'The file you make: its shape, how the 720-sample DV raster is scaled to it, and its frame rate. Everything is rendered in the DV raster first, so an artefact is sized in the medium — an 8×8 block is 8×8 DV pixels — and only then scaled to the output with the right pixel aspect.',
+    how: 'As recorded is 4:3, or 16:9 in the camera’s 16:9 mode. Forcing the other aspect crops to fill rather than adding bars. Full raster shows the 8 samples either side of the 704-wide active picture. Nearest, bilinear and good resampling look very different at 1080p.',
   },
   audio: {
-    what: 'What goes onto the soundtrack, and what kind of soundtrack it is. A film soundtrack is one channel: a magnetic stripe on Super 8 and 70 mm, a photographed optical track on most 16 mm and 35 mm, or nothing at all on a silent film, when the only sound is the projector.',
-    how: 'Choose the track type first — it decides which of the Magnetic Stripe and Optical Track sections apply, and how much treble survives. Silent film is worth trying on anything: the projector’s clatter alone is the most evocative sound in the application.',
+    what: 'What the tape records. DV audio is 16-bit at 48 kHz in stereo, or 12-bit at 32 kHz with four channels, using a non-linear 12-bit code. Many consumer cameras shipped set to 12-bit, so a great deal of real footage is band-limited to about 15 kHz with its own quantisation texture.',
+    how: 'Switch to 12-bit for the authentic consumer sound. Programme level is how loud the world was at the microphone. The output level is only what you hear here. Off passes the source through untouched.',
   },
-  transport: {
-    what: 'The film moving past the sound head. Flywheels and loops isolate the head from the intermittent pull-down, never completely: slow wow from an out-of-round capstan, faster flutter from rollers and sprockets, and a modulation at the perforation rate that is the pull-down itself leaking through.',
-    how: 'Small home projectors had audible wow; cinema machines very little. Sprocket modulation is a subtle, specific buzz at the frame or perforation rate — 18 Hz on Super 8, 96 Hz on 35 mm. A camera’s speed drift is carried into the pitch through the A/V Link, because a camera running slow recorded its sound slow too.',
+  mic: {
+    what: 'The built-in microphone, on the camera body: a small capsule with little bass, a presence peak and a soft top, that hears the room and the wind as well as the subject — and hears the camera, whose own noises are in the Camera Noise section.',
+    how: 'Low and high cut shape the capsule; presence is its forward upper midrange. Room tone is the air and the preamp’s hiss, which the automatic gain will lift in quiet passages. The wind cut thins everything below 200 Hz, wind and voice alike.',
   },
-  magnetic: {
-    what: 'A stripe of iron oxide along the edge of the film, recorded and played like tape. On Super 8 it is under a millimetre wide and moves at 76 mm/s, so it is noisy and its treble stops near 7 kHz — set by the film speed, not by a slider. Print-through is the faint echo of the adjacent winding of the reel, magnetised by it in storage.',
-    how: 'Hiss and head wear do most of the work. Dropouts are flakes of missing oxide. Print-through is a lovely, rarely emulated detail: on a reel stored heads-out the echo arrives before the sound. That needs the future, so only an export renders it as a true pre-echo; the live preview plays it after.',
+  mech: {
+    what: 'What the microphone hears of the camera itself: the transport’s whine — the head drum turning at 9000 rpm, locked to the frame rate — and the capstan; the zoom motor whirring whenever the rocker is pressed; the focus motor ticking while it hunts; the REC button’s clunk at the start of every shot; fingers on the body and the thump of a bump.',
+    how: 'The camera always has audio: with a silent source, this is the soundtrack. Each is a level in dB. The zoom motor follows the zoom’s keyframes; the ticks follow the autofocus; the clunk follows the recording breaks; the thump follows the operator’s bumps — all through the A/V Link.',
   },
-  optical: {
-    what: 'Sound photographed beside the picture and read by a lamp and a photocell. Variable area is a clear wiggling trace that clips hard when it runs out of track; variable density is a band of grey recorded through the film’s own curve, so its distortion is the curve’s. Dirt on the track crackles; a splice bloops; an AC exciter lamp hums at twice the mains frequency.',
-    how: 'Keep modulation under 1 for clean sound, push it over for the ugly clip of an overcut track. Crackle and the picture’s dirt come from the same dirty print when the A/V Link is on. Variable density is the older, softer, noisier sound of the 1930s and 40s.',
-  },
-  playback: {
-    what: 'The equalisation and amplifier between the sound head and the speaker. The Academy curve was a deliberate treble roll-off cinemas applied from 1938 into the 1970s to hide the hiss of optical tracks. A home sound projector’s amplifier was small, mid-forward and built to be heard over its own motor.',
-    how: 'Academy for theatrical prints of any era before Dolby; the projector curve for anything shown at home. Drive pushes the amplifier into the gentle overload of valves or the harder clipping of a transistor stage.',
-  },
-  speaker: {
-    what: 'The loudspeaker and the space it is in: anything from the little cone in the side of a home projector to a horn behind a cinema screen. The cabinet is a synthesised impulse response, not just an EQ, because a box resonance rings in time as well as in frequency.',
-    how: 'Small cabinet, high honk and some breakup is a projector on a coffee table. Large cabinet, low honk and a big room is a picture palace. Through the booth glass puts you in the projection booth: the film sound muffled through the window, the projector loud beside you.',
-  },
-  projnoise: {
-    what: 'The projector itself, in the room: the claw striking the film once a frame, a second rattle from a worn mechanism, air from the shutter and lamp fan chopped at the blade rate, and the motor. It is not part of the soundtrack, so it is added after the speaker, the way CRTBOX added its flyback whine — because it is a machine beside you, not a sound coming out of one.',
-    how: 'Probably the single most evocative sound in the application, and worth having on for anything meant to feel watched in a room. It is locked to the frame rate because it is the frame rate. Raise wear for an old machine; lower the mechanism tone for a big one. With the A/V Link, a frame that jumps in the gate is a frame that clacks louder.',
+  agc: {
+    what: 'Automatic gain control. Loud sounds duck everything; in quiet passages the gain creeps back up and the noise floor and the room tone rise with it — the breathing that every consumer camera’s sound has. Modelled with an attack, a release and a maximum gain, not as a compressor.',
+    how: 'A fast attack and a slow release is the classic pump; a large maximum gain makes a silent room roar. The target is the level it tries to hold. Turn it off for the sound of a camera with a manual level, which few consumer cameras had.',
   },
   link: {
-    what: 'The picture and the sound go through the same machine. A frame the claw struck badly both weaves and clatters; a splice through the gate is a splice past the sound head; the dirt on the picture is dirt on the track; the lamp and the exciter share a supply. This section makes those couplings explicit — it is what makes the application one object rather than two effects.',
-    how: 'Leave it on. Turn individual couplings down if one is too much, but the point is that faults appear in both at once: it is why a splice here reads as a splice rather than a jump cut with a click laid over it. Speed → pitch only matters with camera speed drift on.',
+    what: 'The couplings that make the camera one machine rather than two effects, and only physical ones: the zoom’s speed is the motor’s whirr; a focus hunt is the focus motor ticking; a recording break is a cut, a clunk and a dead stop of the sound; a dropout mutes the audio blocks on the same damaged track; a bump is a jolt and a thump; the drum’s whine is locked to the frame rate.',
+    how: 'Each coupling is a share from 0 to 1 of its full strength. Turn one down to hear what it adds. They are computed from the same event clock the picture uses, so they agree to the frame.',
   },
 };
 
 export const PARAM_HELP: Record<string, string> = {
   /* ---------------- engines ---------------- */
-  'engine.stock': 'Switches off the whole emulsion in one go — curve, grain, halation, dyes, print and fading — leaving an ideal straight-line positive that reproduces the exposure exactly. Use it to see how much of the look is the stock.',
-  'engine.lens': 'Switches off exposure and the lens. The light reaches the film exactly as the source has it: no vignetting, no softness, no flare, no colour cast. The film’s own sharpness still applies.',
-  'engine.gate': 'Switches off all the machinery: camera and projector transport, dirt, scratches, splices, leaks, decay and the telecine. A perfect machine running the same film — the cleanest way to judge the stock alone.',
+  'engine.camera': 'Bypasses every section in the Camera tab at once: the operator, lens, exposure, sensor, focus, white balance, stabiliser, digital zoom, tone, detail, battery, night mode and effects. The Format section stays, because it is not an effect.',
+  'engine.tape': 'Bypasses every section in the Tape tab: interlace, chroma subsampling, the DV codec, tape errors and recording breaks. With it off the picture is the camera’s DSP output, progressive and at full colour resolution.',
+  'engine.display': 'Bypasses every section in the Display tab: the camera’s display, the date, the capture, deinterlacing and the web upload. The Output section has no switch and stays, since the file has to have a shape.',
 
   /* ---------------- format ---------------- */
-  'format.gauge': 'The film’s width and frame size, from Regular 8 at 4.5 × 3.3 mm to 65 mm at 52.5 × 23 mm. It sets the grain scale, the halation radius, how far a micrometre of weave moves the picture, how sharp a given lens looks, where the perforations are and how long a roll lasts.',
-  'format.stock': 'The emulsion. Reversal stocks — Kodachrome, Ektachrome, Tri-X — are projected as they come out of processing and clip highlights hard; negatives — Vision3, Eastman 5247, Double-X — hold enormous latitude and are printed. Each brings its own curve, granularity, dyes and fade rates.',
-  'format.fps': 'How many frames a second the camera exposed. The picture only changes this often, which is much of the character of 8 mm: 16 fps for silent Regular 8, 18 for Super 8, 24 for sound film. Picking a speed different from the projector’s makes motion faster or slower on screen.',
+  'format.system': '525/60 is 720 × 480 at 29.97 frames (59.94 fields) with 4:1:1 colour; 625/50 is 720 × 576 at 25 frames (50 fields) with 4:2:0. It also sets the mains frequency fluorescent light flickers at, so a 525 camera under 50 Hz light would beat — not modelled across regions.',
+  'format.tape': 'MiniDV and Digital8 record the same DV stream and decode identically. Digital8 ran Hi8 tape at twice the speed, and old Hi8 stock drops out a little more, so the dropout rate is raised by about half.',
+  'format.sensor': 'A fork, not a slider. The single complementary CCD decodes colour from filter sums and differences, with low colour resolution, false colour and muddy reds; three CCDs on a prism give clean colour; CMOS swaps smear for a rolling shutter.',
+  'format.sensorSize': 'The sensor’s optical format. Smaller means smaller photosites: more read noise relative to the signal (the gain needed sooner) and diffraction setting in at wider apertures. The depth of field is enormous whichever you choose.',
+  'format.aspect': 'Most consumer cameras made 16:9 by recording the middle three quarters of a 4:3 sensor’s rows stretched to the full raster and flagged anamorphic. The picture is wider and has less vertical detail; the output frame follows the flag.',
 
-  /* ---------------- curve ---------------- */
-  'curve.enabled': 'Switches off the characteristic curve. The film becomes an ideal straight-line positive with no toe and no shoulder, so you can see exactly what the curve was doing — usually, holding the highlights and the blacks.',
-  'curve.gamma': 'The slope of the straight-line section, as a multiple of the stock’s own. Above 1 is a harder, more contrasty development; below 1 is softer. Grey stays where it is; the ends move.',
-  'curve.toe': 'Moves the shadow end of the curve, in log exposure. Positive crushes more of the shadows into the film’s black; negative opens them up. On reversal this is the dense end of the film; on a negative it is the thin end.',
-  'curve.toeSoftness': 'How gradually the shadows bend into the toe. Soft toes give a long, gentle fall into black; hard ones a sudden floor. Multiplies the stock’s own softness.',
-  'curve.shoulder': 'Moves the highlight end, in log exposure. Negative brings the shoulder down into the picture so highlights compress sooner; positive gives them more room. On reversal stocks the shoulder is close above grey to begin with, which is why they clip.',
-  'curve.shoulderSoftness': 'How gently the highlights bend over at the shoulder. A soft shoulder is the long highlight roll-off people mean by "film"; a hard one is reversal’s abrupt clip. Multiplies the stock’s own.',
-  'curve.crossover': 'Gives the three layers slightly different contrast, so shadows and highlights take opposite colour casts — magenta shadows and green highlights, or the reverse. Real stocks have a little; mismatched processing has a lot.',
-  'curve.push': 'Push processing: the film was rated faster and developed longer. Each stop of push raises contrast, adds fog to a negative or weakens a reversal’s blacks, and enlarges the grain, while recovering most but not all of the lost exposure. Negative values pull: softer and finer.',
-
-  /* ---------------- grain ---------------- */
-  'grain.enabled': 'Switches grain off entirely. Useful for judging the curve and the dyes by themselves, and a reminder of how much of the "texture of film" grain is responsible for.',
-  'grain.amount': 'Multiple of the stock’s published RMS granularity. At 1 the grain is what the data sheet says for this stock on this gauge at this output resolution. Change the stock or gauge for a different grain; use this to exaggerate or tame it.',
-  'grain.size': 'Multiple of the size of a grain clump on the film. Larger clumps are coarser and more visible at the same RMS; smaller ones become finer than a pixel and average away. Fast stocks have larger clumps than slow ones.',
-  'grain.colour': 'How independent the three layers’ grain is. Real colour film has three separate emulsions, each with its own grain, so its grain has colour. At 0 every layer shares one pattern and the grain is neutral, like a silver print.',
-  'grain.blue': 'Scales the blue-sensitive layer’s grain on top of the stock’s own balance. That layer is usually the grainiest, because it is the fastest; raising it gives the speckled yellow-blue grain of a pushed or cheap stock.',
-  'grain.roughness': 'Weight of a coarser octave of noise on top of the clumps — how much grains gather into clusters rather than sitting evenly. Real grain has structure; at 0 it is a single scale of noise and looks finer and more digital.',
-  'grain.density': 'How grain power follows density. At 0.5, the square-root law silver obeys, grain lives where there is density to fluctuate. At 0 it is uniform — the classic mistake of an additive grain filter; at 1 it is heavily concentrated in dense areas.',
-  'grain.print': 'The print stock’s own grain, and that of any duplicate generations. Print stocks are very fine-grained, so this is subtle, but it is a second, independent layer of grain on top of the negative’s — part of why a print looks different from a scan.',
-
-  /* ---------------- halation ---------------- */
-  'halation.enabled': 'Switches halation off. Light reflecting back off the base is part of every film image, and a bright light without its halo is one of the quickest giveaways of a digital emulation.',
-  'halation.amount': 'Multiple of how much light the stock’s anti-halation backing lets back. Stocks with good backing halate faintly; early stocks and some reversal glowed spectacularly. Raise it for night scenes full of practical lights.',
-  'halation.radius': 'Multiple of the halo’s radius, which is set by the thickness of the base: roughly 1.7 base thicknesses, about a quarter of a millimetre. That is a twentieth of a Super 8 frame and a sixtieth of a 35 mm one.',
-  'halation.green': 'How much of the reflected light reaches the green-sensitive layer as well as the red. At 0 the halo is pure red; around 0.3 it is the familiar orange. The blue layer is shielded by the yellow filter layer and barely halates at all.',
-  'halation.noBacking': 'The remjet anti-halation layer removed before processing — the trick CineStill uses to put motion-picture film in still cameras. Halation becomes about eight times stronger, and every light source carries a red-orange glow.',
-
-  /* ---------------- dyes ---------------- */
-  'dye.enabled': 'Switches off interimage effects and the dyes’ impurity. Colours become what three independent, perfectly pure layers would give: correct, and noticeably flatter than film.',
-  'dye.saturation': 'Strength of the interimage effect, as a power of the stock’s own: 0 is none — layers develop independently — 1 is the stock as made, 2 doubles it. This is film’s colour separation, done in density, which is why it looks different from a saturation slider.',
-  'dye.impurity': 'How far the dyes are from ideal. Real cyan dye absorbs some green, real magenta a good deal of blue; more impurity muddies colours towards brown, less makes them unrealistically pure. Scales the stock’s own impurity.',
-
-  /* ---------------- print ---------------- */
-  'print.enabled': 'Switches the print stage off. A negative is then shown as a scanned negative — inverted with a straight line — so you can compare what the print stock adds: its highlight roll-off, its blacks and its contrast.',
-  'print.process': 'How a negative becomes a picture: printed onto print stock through printer lights, scanned and inverted digitally, or not at all — the negative on a light box, orange mask and all. Reversal stocks are already positives and ignore this.',
-  'print.stock': 'The positive stock. Vision 2383 is the modern release print; 5381 is the 1970s stock whose dyes faded pink; Technicolor dye transfer is purer and almost permanent; 2302 is black-and-white, and prints a colour negative as monochrome.',
-  'print.red': 'Red printer light in printer points, 0.025 log exposure each, around the laboratory’s nominal 25. More red light exposes the print’s red-sensitive layer more, which forms more cyan dye: the print goes cyan.',
-  'print.green': 'Green printer light. More green light forms more magenta dye in the print; less leaves it greener. The laboratory’s main tool for correcting a magenta or green cast.',
-  'print.blue': 'Blue printer light. More blue light forms more yellow dye in the print; less leaves it bluer. Raising red and green together against blue is how a lab warmed a scene up.',
-  'print.density': 'All three printer lights together, in points: a darker or lighter print with the same colour. Eight points is about a stop on the print — which is how a lab printed a scene darker for night.',
-  'print.generations': 'Copies before the print: an interpositive, an internegative, and so on. Each generation adds its own grain, a little contrast and a little softness. Release prints were often third or fourth generation; a late-run print could be further down still.',
-  'print.bleachBypass': 'Skipping the bleach that removes silver from the print, so silver stays in alongside the dye. The result is contrastier, desaturated and harsher — the look of a number of late-1990s films. At 1 it is a full bypass; values between are partial.',
-
-  /* ---------------- fading ---------------- */
-  'fade.enabled': 'Switches dye fading off. The positive looks as it did the day it was printed, whatever age and storage say.',
-  'fade.years': 'How long the positive — the print, or a reversal original — has existed. The stock sets how fast each dye goes: Kodachrome barely moves in fifty years in the dark, 5381 prints are pink within twenty at room temperature.',
-  'fade.storage': 'Where the film has been. Dye fading roughly doubles with every five to seven degrees, so a cold vault preserves a print for centuries and a loft that bakes every summer destroys it in a decade.',
-  'fade.cyan': 'Multiple of the stock’s cyan fade rate. Cyan is usually the first dye to go in the Eastman stocks of the 1970s, which takes red absorption away and leaves everything red or pink.',
-  'fade.magenta': 'Multiple of the stock’s magenta fade rate. Magenta is usually the most stable dye in those stocks, which is why faded prints end up magenta rather than grey.',
-  'fade.yellow': 'Multiple of the stock’s yellow fade rate. Yellow fading lets blue through; with cyan gone as well it turns a red cast into a pink-magenta one.',
-  'fade.stain': 'Multiple of the stock’s rate of yellow staining: the base and leftover couplers yellowing with age, which adds density in the blue and partly offsets the yellow dye’s loss. Old prints are often both faded and stained.',
-
-  /* ---------------- exposure ---------------- */
-  'exposure.enabled': 'Switches the Exposure section off: correct exposure, light matched to the stock, no filter and no highlight expansion of the source.',
-  'exposure.stops': 'Exposure relative to what the meter asked for. On reversal, half a stop either way is visible and two stops over is ruined; on a negative, two stops either way prints almost normally. This is where the difference between the two shows most.',
-  'exposure.headroom': 'How far above white the source’s brightest highlights are assumed to have been in the real scene. Video clips at white; the scene did not. Expanding the highlights back gives the shoulder and the halation something to work on. Lower it for flat, graphic sources.',
-  'exposure.light': 'What the scene was lit with, compared with what the stock is balanced for. Tungsten film in daylight goes blue; daylight film under tungsten goes orange; fluorescent tubes go green on everything. "Matched" assumes the footage was lit correctly for the stock.',
-  'exposure.filter85': 'The Wratten 85 conversion filter: orange, about two-thirds of a stop. It converts daylight to tungsten balance, and every Super 8 camera had one built in for Type A film, switched out by screwing in a movie light. Left in indoors it turns everything amber.',
+  /* ---------------- operator ---------------- */
+  'operator.enabled': 'Switches the person holding the camera on. Off is a camera on a tripod that nobody touches, which a consumer camcorder seldom was.',
+  'operator.tremor': 'The fine, fast shake of a hand holding something at arm’s length, in degrees. Invisible at the wide end and impossible to miss at full zoom, because the zoom multiplies it.',
+  'operator.sway': 'The slow wander of unbraced arms, a fraction of a degree to a few degrees. The stabiliser leaves most of it alone, being slow.',
+  'operator.walk': 'The vertical bob of each step and the sideways roll at half the step rate, in degrees. A degree or two is walking with the camera; more is running.',
+  'operator.cadence': 'Steps per second while walking. About 1.9 is a stroll; 2.5 and up is a jog. The bob is locked to it.',
+  'operator.bumps': 'How often a hand shifts its grip, per minute. Each bump is a jolt that rings out over a fraction of a second, and a thump on the microphone at the same moment.',
+  'operator.bumpSize': 'How far a bump throws the camera, in degrees, at its peak. One or two degrees is a jolt; five is someone being knocked.',
+  'operator.whips': 'Fast swings to look at something else and back, per minute. A whip pan is too fast for the shutter, so it smears; on a CMOS camera it also bends.',
+  'operator.whipAngle': 'How far a whip pan swings, in degrees. The view beyond the edge of the source is the source mirrored, so very large swings show it.',
+  'operator.pan': 'Where the camera points, left and right, in degrees. Keyframe it for a deliberate pan; the stabiliser fights it briefly before it lets go, and a rolling shutter leans verticals while it moves.',
+  'operator.tilt': 'Where the camera points, up and down, in degrees. Keyframe it for a tilt up the tree or down to the cake.',
+  'operator.roll': 'A horizon that is not level, in degrees. The stabiliser does not correct roll, as most did not.',
 
   /* ---------------- lens ---------------- */
-  'lens.enabled': 'Switches the lens off: a perfect lens with infinite resolution, no vignetting, no fringing and no flare. The film’s own sharpness still applies.',
-  'lens.resolution': 'Resolving power in line pairs per millimetre on the film at 50% contrast. Because it is measured on the film, the same lens takes a bigger bite of a small frame: 40 lp/mm is soft on Super 8 and sharp on 35 mm. Typical: a Super 8 zoom 25–40, a 16 mm prime 60–80, a 35 mm prime 80–120.',
-  'lens.corners': 'How much softer the corners are than the centre. Cheap zooms fall off badly towards the corners, especially wide open; good primes hardly at all.',
-  'lens.defocus': 'A focus miss: the radius of the blur circle on the film, in micrometres. Twenty is a near miss on 35 mm and a disaster on Super 8. Unlike the projector’s focus, this softens the picture but not the grain, because the grain was not there yet.',
-  'lens.vignette': 'Light lost in the corners, in stops. Small zooms wide open lose a stop or more; it was part of the look of home movies. Applied as exposure, so the curve decides how it looks — on reversal the corners block up into black.',
-  'lens.chromatic': 'Lateral chromatic aberration: how far apart the red and blue images are at the corner of the frame, in micrometres on the film. Coloured fringes along edges towards the corners. Five to ten is typical of a cheap zoom.',
-  'lens.distortion': 'Barrel (positive) or pincushion (negative) distortion. Wide zooms barrel; long ones pincushion. Small values are realistic; large ones are a fisheye.',
-  'lens.flare': 'Veiling flare: light scattered inside the lens and spread evenly over the frame, as a fraction of the average exposure. It lifts the shadows and lowers contrast. A few percent is what makes Super 8 shadows look milky; uncoated lenses had much more.',
-  'lens.flareTint': 'Colour of the veiling flare. Lens coatings are not neutral, and old single-coated glass tends warm. Positive warm, negative cool.',
+  'lens.enabled': 'Switches the lens model on: zoom, softness, vignetting, lateral colour, flare, diffraction and adapters. Off is a perfect lens at the widest view.',
+  'lens.zoom': 'The zoom position: 1 is the wide end. Up to the optical range it narrows the view of the source; beyond it, with Digital Zoom enabled, the camera enlarges a crop of the sensor. Keyframe it: the zoom motor is heard while it moves and the display shows the zoom bar.',
+  'lens.range': 'The longest optical zoom: 10× was common, 25× the boast of the late 1990s. It sets where the digital zoom takes over and how the zoom bar reads.',
+  'lens.fov': 'The horizontal field of view at the wide end, in degrees. The source frame is taken to be this wide, which sets how many pixels a degree of shake moves the picture.',
+  'lens.softness': 'The lens’s blur at the centre of the frame, in DV pixels. A good consumer zoom was around half a pixel; a cheap one or a soft converter a pixel or more.',
+  'lens.corners': 'Extra blur towards the corners, in DV pixels at the extreme corner. Small zooms were sharp in the middle and soft at the edges.',
+  'lens.vignette': 'Light falloff at the corners at the wide end, in stops. It lessens as the zoom moves to the long end, as it did on these lenses.',
+  'lens.chromatic': 'Lateral colour: red and blue images of different sizes, so edges near the corners get colour fringes. In DV pixels at the corner at the long end, where these zooms were worst.',
+  'lens.flare': 'Veiling glare: light scattered by cheap coatings across the whole frame, proportional to how bright the scene is. It lifts the blacks and lowers the contrast round bright subjects.',
+  'lens.diffraction': 'Softening at small apertures, as a multiple of the physical Airy disc for the sensor size and the f-number the automatic exposure chose. At 1 it is physics; why the camera raises the shutter instead of stopping down in sun.',
+  'lens.adapter': 'A converter on the front of the lens. The wide-angle widens with barrel distortion and soft corners; the fisheye bends everything round the centre, with a soft rim and a hard round vignette.',
+  'lens.distortion': 'The zoom’s own barrel distortion at the wide end, falling to slight pincushion at the long end. Positive is barrel. Adapters add their own on top.',
 
-  /* ---------------- anamorphic ---------------- */
-  'anamorphic.enabled': 'Turns the anamorphic lens on: the picture is squeezed onto the film and stretched back on projection, and bright sources streak sideways.',
-  'anamorphic.squeeze': 'How much narrower the picture is on the film than on the screen. 2× is CinemaScope. Everything on the film — grain, dust, the lens’s blur — is stretched by the same factor on the way out, which is a large part of the anamorphic look.',
-  'anamorphic.streak': 'Strength of the horizontal streak flare an anamorphic lens throws through bright light sources. Added as exposure, so it goes through the curve and halates like any other light.',
-  'anamorphic.streakLength': 'How long the streak is, as a fraction of the frame width. Long thin streaks across the whole frame are the familiar look; short ones are subtler.',
-  'anamorphic.streakTint': 'Colour of the streak, from neutral to the electric blue of coated anamorphic glass.',
-  'anamorphic.threshold': 'How many stops over grey a highlight must be before it streaks. Lower it and everything bright streaks; raise it and only real light sources do.',
+  /* ---------------- exposure ---------------- */
+  'exposure.enabled': 'Switches the light and the automatic exposure on. Off passes the source’s brightness straight through, at a nominal shutter and no gain.',
+  'exposure.scene': 'How bright the world is, in stops relative to the light needing f/1.6, 1/60 s and no gain. The automatic exposure works to correct it, using iris, shutter and gain, and how it gets there is the look. Keyframe it to walk outside.',
+  'exposure.mode': 'Automatic chases the light with lag; Locked holds an exposure correct for the scene light, ignoring what is in the frame, which is what a careful operator with a manual iris would do.',
+  'exposure.comp': 'Exposure compensation in stops: the little wheel. Locked, it is the offset from a correct exposure.',
+  'exposure.speed': 'How long the automatic exposure takes to settle after the light changes, in seconds. Consumer cameras took about a second; slower is smoother and more visible.',
+  'exposure.damping': 'How the exposure settles: below about 0.7 it overshoots and pumps back — the blow-out-then-darken of walking into daylight — and at 1 it approaches smoothly.',
+  'exposure.backlight': 'Backlight compensation: the meter favours the centre and opens up by a stop and a half, so a subject against a bright window is visible and the window burns out.',
+  'exposure.shutter': 'The CCD’s electronic shutter. Automatic raises it in bright light. 1/60 s (1/50 in 625) is one field; faster freezes motion into staccato steps and strengthens smear; 1/30 and 1/15 integrate over two and four fields, repeating fields and smearing motion into trails.',
+  'exposure.maxGain': 'The most the camera will boost the signal in the dark, in dB. +18 dB was typical. Gain noise is in the signal before the codec, so a gained-up picture costs bits everywhere.',
+  'exposure.hunt': 'How much the exposure chases mains flicker and other fast light changes instead of averaging them. Under fluorescent light at a fast shutter the picture flickers; this makes the exposure chase the flicker too.',
 
-  /* ---------------- camera ---------------- */
-  'camera.enabled': 'Switches the camera transport off: perfect registration, perfectly repeatable exposure, a motor that holds speed and no flash frames.',
-  'camera.weave': 'Registration error in micrometres on the film. The image moves relative to the film — the grain stays put, which is what makes it look recorded rather than projected. Super 8 with its plastic pressure plate: 20–40 µm. A pin-registered 35 mm camera: under 5.',
-  'camera.weaveSpeed': 'Rate of the slow wander, in hertz. The loop and pressure plate settle slowly; the wander has a period of a second or two.',
-  'camera.jitter': 'Share of the registration error that is new every frame — where the claw happened to engage — rather than slow drift. High values twitch; low ones float.',
-  'camera.flicker': 'Frame-to-frame exposure variation, in stops. A shutter and motor that do not quite repeat expose every frame slightly differently: the shimmer of Super 8 is mostly this. A tenth of a stop is plenty.',
-  'camera.speedDrift': 'How far the camera’s speed wanders, as a fraction. A slow frame is a longer exposure — brighter — and, projected at the normal rate, makes motion faster. With the A/V Link the recorded sound drifts in pitch with it.',
-  'camera.flashRate': 'How often per minute the camera was started. Each start overexposes the first frames while the motor comes up to speed, which is why home movies flash white at the head of every shot.',
-  'camera.flashFrames': 'How many frames each camera start burns. The first is the worst; the rest settle quickly.',
+  /* ---------------- sensor ---------------- */
+  'sensor.enabled': 'Switches the sensor model on: the mosaic and its colour decoding, full wells, blooming, smear and noise. Off is an ideal three-colour sensor with no noise and no clip.',
+  'sensor.well': 'Where each photosite stops collecting charge, as a multiple of the charge reference white produces. With gain up, the well clips sooner relative to white. On the mosaic each filter clips at its own point, which colours the edge of a blown sky.',
+  'sensor.smear': 'Charge leaking into the vertical registers during readout, as a share of each column’s total light, at 1/60 s. It is a fixed amount per readout while the signal shrinks with the shutter time, so smear grows as the shutter gets faster. CCD only.',
+  'sensor.bloom': 'How far a full photosite’s overflow spills into its neighbours: mostly up and down the column, a little sideways. It fattens a point light into a blob before the smear draws its stripe.',
+  'sensor.crosstalk': 'How much each colour filter passes of the colours it should block. The camera’s decoding matrix undoes about half of it, so saturated colours — reds especially — come out muddy and noise is amplified. On a Bayer CMOS it is halved; a prism hardly has any.',
+  'sensor.noise': 'Read noise at 0 dB, as a share of reference white, scaled by the sensor size. The gain multiplies it; on the mosaic it is decoded into coarse, coloured blotches rather than fine grain.',
+  'sensor.shot': 'Photon shot noise, rising with the square root of the signal: grainier highlights than shadows, in absolute terms, until the gain makes the shadows worse.',
+  'sensor.headroom': 'A clipped source cannot say how bright a highlight really was. Values within the source’s top few percent are opened up by this many stops, so a sun or a bulb has the energy to fill wells, bloom and smear while a white shirt barely changes. Zero takes the source literally.',
+  'sensor.rolling': 'How long a CMOS sensor takes to read from the top row to the bottom, as a share of the field period. The camera’s own motion — pans, shake, whips — is sampled row by row, so verticals lean. Subject motion is sampled once a field.',
 
-  /* ---------------- projector ---------------- */
-  'projector.enabled': 'Switches the projector’s faults off: no gate weave, no shutter, no lamp hot spot or colour, perfect focus and framing. A perfect transfer of a real film.',
-  'projector.weave': 'Gate weave in micrometres: the whole strip wandering in the projector’s gate. Picture, grain and dirt move together, which is the opposite of the camera’s registration error and the way to tell them apart.',
-  'projector.rotation': 'Share of the weave that is a slight tilt rather than a slide. Worn edge guides let the strip rock as well as shift.',
-  'projector.speed': 'How fast the projector runs. A 16 fps silent film on a 24 fps sound projector runs half as fast again — which is how silent comedies came to look frantic. Sound is played faster too, and higher.',
-  'projector.blades': 'The shutter that hides the film while it moves. Filmed off the screen with a video camera, its two or three interruptions a frame beat against the camera’s own frame rate: the flicker and shimmer of "filmed off the wall". A telecine has no shutter.',
-  'projector.captureShutter': 'Exposure time of the camera filming the screen, as a fraction of its frame. Short exposures catch the shutter’s beat hardest; a fully open shutter averages it away.',
-  'projector.mains': 'Mains frequency, 50 or 60 Hz. The lamp’s ripple and the exciter lamp’s hum are at twice this, and the projector’s synchronous motor hums at it.',
-  'projector.lampRipple': 'Brightness ripple from a lamp run on alternating current, at twice the mains frequency. Captured by a camera, it beats into a slow flicker; with the A/V Link it is also heard as hum, because the lamp and the exciter share a supply.',
-  'projector.hotspot': 'Light falling off from the centre of the screen, in stops at the corners. Small projectors with short focal lengths had a pronounced hot spot.',
-  'projector.warmth': 'Colour of the projection lamp: a tungsten bulb warm, a xenon arc cool. Small home projectors were noticeably warm.',
-  'projector.focus': 'The projection lens out of focus, as a blur radius on the film. Unlike the camera lens, this softens the grain and the dirt too, because they are on the film being projected.',
-  'projector.buckle': 'The frame bowing towards the lamp as it heats, so the focus breathes and the centre of the picture softens before the edges. Old projectors with hot lamps and worn gates buckled visibly.',
-  'projector.framing': 'The framing knob out of adjustment, in frames: the frame line and the edge of the next frame creep into the picture at top or bottom.',
+  /* ---------------- focus ---------------- */
+  'focus.enabled': 'Switches the autofocus model on. Off is perfect focus, which the enormous depth of field of a small sensor almost always gave anyway.',
+  'focus.hunts': 'How often the autofocus loses focus by itself, per minute; it also hunts once at the start of every shot. A hunt racks out, back through focus to the other side and settles, over a second or so.',
+  'focus.depth': 'How far out of focus a hunt goes at its worst, as blur in DV pixels. Three or four is clearly soft; eight is a smear.',
+  'focus.miss': 'A constant focus error in DV pixels: the camera locked on the background behind a near subject, or a lens that never quite got there.',
 
-  /* ---------------- gate dirt ---------------- */
-  'gatedirt.enabled': 'Switches gate dirt off: no hairs, no grit lodged in the gate.',
-  'gatedirt.hair': 'How often a hair is caught at the edge of the aperture. It sits still on the screen while the film runs past, fluttering slightly, until it is dislodged — the classic "hair in the gate" a cinematographer checked for after every take.',
-  'gatedirt.specks': 'How much grit is lodged in the gate. It stays still on screen for seconds while the picture moves beneath it, and gathers towards the edges, where the film drags.',
-  'gatedirt.life': 'How long a hair or a speck stays before it is dislodged, in seconds. Real gate dirt can last a whole shot.',
-  'gatedirt.wiggle': 'How much a hair flutters as each frame is pulled past it. Hairs at the edge of the gate are disturbed once a frame by the film moving, and sway in the air from the shutter.',
-  'gatedirt.size': 'Scales hairs and specks together. They are sized physically — a hair is 50–100 µm — so a hair caught in a Super 8 gate is a thick dark line across a tenth of the picture, and the same hair in a 35 mm gate a fine one.',
+  /* ---------------- white balance ---------------- */
+  'wb.enabled': 'Switches the light’s colour and the white balance on. Off treats the source as already balanced.',
+  'wb.light': 'What the scene was lit by, as a colour cast on the light. The camera then tries to remove it. Tungsten and household bulbs are orange; fluorescent tubes green; shade blue.',
+  'wb.mode': 'Automatic averages the frame and follows slowly, part of the way; the indoor and outdoor presets correct exactly for 3200 K and 5600 K; Held freezes what it had at the first frame.',
+  'wb.speed': 'How slowly the automatic white balance drifts towards its target, in seconds. Consumer cameras took several; walk from a tungsten room to a window and watch it catch up.',
+  'wb.range': 'How much of the cast the automatic balance removes, along the amber–blue axis. Green–magenta it barely touches. Around half leaves tungsten clearly orange, as most consumer cameras did.',
+  'wb.tint': 'A residual green–magenta error in the camera’s colour matrix, independent of the light. A little is the slightly-off colour every cheap camera had.',
 
-  /* ---------------- film dirt ---------------- */
-  'filmdirt.enabled': 'Switches film dirt off: no dust, no lint, on either the negative or the positive.',
-  'filmdirt.dust': 'Dust specks per frame. Each frame is a different piece of film, so each frame has different dust, and it lasts one frame only — the twinkle of a dusty print.',
-  'filmdirt.fibres': 'Lint and short hairs on the film itself: curled strokes that, unlike gate hairs, last one frame and jump about.',
-  'filmdirt.size': 'Physical size of the dirt. A speck of dust is the same size whatever film it lands on, so it covers a far larger share of a Super 8 frame than a 35 mm one.',
-  'filmdirt.negative': 'Share of the dirt that was on the negative when it was printed. That dirt held back the printer light, so it prints white — the "sparkle" of a print from a dirty negative. Only a printed negative has a second film for dirt to be on.',
+  /* ---------------- stabiliser ---------------- */
+  'eis.enabled': 'Switches electronic stabilisation on: a narrower, slightly softer view whose crop moves against the shake once a field.',
+  'eis.margin': 'The share of the sensor kept in reserve on each side. A tenth is typical; more corrects bigger shakes but narrows the view and enlarges the crop more.',
+  'eis.strength': 'How much of the shake’s fast part the crop cancels. Even at 1 the blur from shake during the exposure remains, which is the stabiliser’s giveaway.',
 
-  /* ---------------- scratches ---------------- */
-  'scratch.enabled': 'Switches scratches off, on the negative and the positive alike. The grit that would have drawn them is still in the gate as far as the Gate Dirt section is concerned.',
-  'scratch.rate': 'How often a scratch is running. Each is a piece of grit riding in a gate: it arrives, draws a continuous line along the film for a while, and falls out.',
-  'scratch.life': 'How long, in seconds, a piece of grit stays in the gate drawing its line. Scratches last seconds, not frames — which is what makes them scratches and not dirt.',
-  'scratch.width': 'Width of a scratch on the film, in micrometres. The same scratch is a hairline on 35 mm and a stripe on Super 8.',
-  'scratch.depth': 'How deep an emulsion scratch cuts. A shallow one removes only the top dye layer and is coloured — green on a print, blue on reversal; a deep one removes all three and is clear.',
-  'scratch.base': 'Share of scratches on the base side rather than the emulsion. A base scratch removes no dye; it scatters the light crossing it, so it reads as a soft dark line on a print — and a bright one if it was on the negative.',
-  'scratch.negative': 'Share of scratches made on the negative before printing. Their polarity reverses: an emulsion scratch on the negative prints dark, a base scratch prints bright. Only matters for a printed negative.',
-  'scratch.wander': 'How far a scratch drifts sideways along its length, as the grit rocks and the strip weaves in the gate.',
+  /* ---------------- digital zoom ---------------- */
+  'dzoom.enabled': 'Lets the zoom go past the optical range by enlarging a crop of the sensor in the camera.',
+  'dzoom.max': 'The most the digital zoom will enlarge, on top of the optical range. The box’s “500×” was 25× optical times 20× digital.',
+  'dzoom.filter': 'How the crop is enlarged: pixel repeat makes square blocks of sensor pixels, in each field separately; linear interpolation is softer but still has no detail to show.',
 
-  /* ---------------- splices ---------------- */
-  'splice.enabled': 'Switches splices and cue marks off: the film is one unbroken strip, with no jumps, no flashes, no pops in the soundtrack and no reel-change marks.',
-  'splice.rate': 'How often per minute the film has been joined. With A/V Link on, every splice also pops in the soundtrack — a click on a magnetic stripe, a low "bloop" on an optical track.',
-  'splice.kind': 'Tape splices lay clear tape across the join: its two edges cross the frame and the frames under it go hazy. Cement splices overlap and weld the film: a thin line at the frame line and a slightly denser frame.',
-  'splice.jump': 'How far the picture jumps as the splice goes through the gate — a thicker join lifts the film off the claw for a frame.',
-  'splice.flash': 'Strength of the light frame at the join, where the film was scraped clean for cement or the tape lets the frame go thin.',
-  'splice.cueMarks': 'Cue marks: circles punched or scribed into the top right of four frames, eight seconds before the end of a reel and again one second before, for the projectionist to start the next projector and change over.',
-  'splice.reel': 'Reel length in seconds, for placing the cue marks. A 35 mm 2,000 ft reel ran about twenty minutes; set this to your clip’s length to put the marks at the end of it.',
+  /* ---------------- tone ---------------- */
+  'tone.enabled': 'Switches the camera’s transfer curve on. Off uses a plain sRGB curve with no knee and no clip, so the camera adds nothing to the tones.',
+  'tone.gamma': 'The transfer exponent, about 0.45 for a video camera, with the linear toe of Rec. 601. Lower is flatter and lighter in the midtones.',
+  'tone.knee': 'The signal level at which the knee starts compressing highlights. 0.85 to 0.9 was usual; lower holds more highlight detail at the cost of flatter highs.',
+  'tone.slope': 'The slope of the curve above the knee. Shallow holds bright skies further before the wall; steep reaches the clip quickly.',
+  'tone.clip': 'The white clip in IRE. 100 is reference white; consumer DV cameras ran to about 108 or 109, the superwhites a FireWire capture kept and a display might clip.',
+  'tone.pedestal': 'Black level. Positive lifts the blacks into grey; negative crushes shadow detail, which some cameras did to hide noise.',
+  'tone.saturation': 'The camera’s chroma gain. Consumer cameras ran a little hot to look vivid in the shop; more also amplifies the mosaic’s colour noise.',
 
-  /* ---------------- leaks ---------------- */
-  'leak.enabled': 'Switches light leaks and fog off: the camera and cartridge were light-tight and the film was loaded in the dark.',
-  'leak.amount': 'A leak from the side of the camera or the cartridge, flaring and fading. It is exposure, so it goes through the curve, and it arrives through the base, so it is orange.',
-  'leak.position': 'Where round the frame the light gets in, as a fraction of the way round from the right-hand edge.',
-  'leak.speed': 'How quickly the leak flares and fades. Leaks track camera movement and how the light falls on the camera body, so they come and go over seconds.',
-  'leak.edgeFog': 'Light piped along the perforated edge of the film from the cartridge, fogging that side of every frame. A thin orange band down one side is characteristic of some Super 8 cameras.',
-  'leak.rollFog': 'Fog on the first and last frames of a load, from loading and unloading in daylight. The clip is taken to start at the head of a load, so its opening second is burned orange — including the paused first frame — and the fog returns wherever the gauge’s roll ends: every 3,600 frames on Super 8.',
-  'leak.warmth': 'Colour of leaked light. Light coming through the base reaches the red-sensitive layer first, so leaks are orange-red; 0 treats it as white light hitting the emulsion from the front.',
+  /* ---------------- detail ---------------- */
+  'detail.enabled': 'Switches the detail enhancer on: the peaking filter every camcorder applied before recording.',
+  'detail.gain': 'How strongly edges are boosted. 1 is a normal consumer setting; 2 and above is the brittle early-2000s look that also rings in the codec.',
+  'detail.freq': 'The peaking filter’s reach in DV pixels. Around one pixel gives thin halos that sharpen fine detail; two or three gives wide halos round everything.',
+  'detail.vertical': 'Vertical enhancement as a share of the horizontal. It compares lines of the same field, two frame lines apart, so horizontal edges twitter between fields.',
+  'detail.coring': 'Detail below this amplitude is not boosted. It keeps the enhancer from sharpening gain noise into grit; set it too high and fine texture goes flat.',
+  'detail.limit': 'The largest boost any edge receives. It caps the halo on the strongest edges, which is why they look outlined rather than glowing.',
+  'detail.dark': 'Strength of the dark fringe relative to the bright one. Cameras often clipped the dark side less, giving a black line under bright edges.',
 
-  /* ---------------- decay ---------------- */
-  'decay.enabled': 'Switches decay off: the film is physically intact, whatever its dyes have done.',
-  'decay.vinegar': 'Vinegar syndrome: acetate base breaking down, shrinking unevenly and buckling. The film itself is warped, so the image, its grain and everything on it bend together. Smells of vinegar; looks seasick.',
-  'decay.channelling': 'The emulsion lifting in ridges along the film as the base shrinks beneath it. A network of fine lines running along the strip, catching the light.',
-  'decay.mould': 'Fungus eating the gelatin in soft-edged colonies that lighten and discolour the picture. Colonies are on the film, so they weave with it and creep from frame to frame.',
-  'decay.water': 'Tide lines where water dried on the emulsion: dark rings with a faint stain inside them.',
-  'decay.flaking': 'Patches where the emulsion has come away entirely, leaving clear base with a dark ragged rim.',
+  /* ---------------- battery ---------------- */
+  'battery.enabled': 'Switches the battery model on: it drains with recording and standby, and when it is empty the camera stops recording.',
+  'battery.charge': 'How full the battery was at the first frame, in percent. Below about 10 percent the display’s gauge blinks.',
+  'battery.capacity': 'Minutes of recording on a full charge. Standby between shots drains it at a third of the rate, so long gaps between shots shorten the evening.',
 
-  /* ---------------- telecine ---------------- */
-  'telecine.enabled': 'Switches the telecine’s pulldown and tone controls off: progressive frames, grey and white at their defaults, no black lift.',
-  'telecine.fields': 'Build each video frame from two fields that may show different film frames. With 24 fps film and 29.97 fps output this is the 3:2 cadence: two frames in every five are mixed, combed where things move, and motion judders in a rhythm of three fields and two.',
-  'telecine.fieldOrder': 'Which field comes first in time. NTSC transfers were usually lower field first; this only changes which lines carry the later film frame.',
-  'telecine.grey': 'Where the print’s aim density lands on video, as linear light. 0.18 puts it at the conventional mid grey.',
-  'telecine.white': 'Where clear film lands on video. Above 1 the highlights of the print clip on video before the film clips; below 1 the transfer is dim and safe.',
-  'telecine.black': 'Flare in the transfer, lifting the blacks — the milky shadows of an old flying-spot telecine. The black point is otherwise set on the film’s own unexposed density.',
-  'telecine.saturation': 'The colourist’s saturation control, in linear light on the video side. Unlike the dye controls, this does nothing to how the film formed its colour.',
+  /* ---------------- night ---------------- */
+  'night.enabled': 'Swings the IR-cut filter out and lights the IR lamp: near-monochrome green, a central hot spot, glowing eyes.',
+  'night.ir': 'The infrared lamp’s strength, as light comparable to the scene. It is metered like any other light, so a bright lamp pulls the exposure down and the edges fall to black.',
+  'night.spot': 'The lamp’s beam width as a share of the frame’s half-diagonal. Narrow is a torch-like hot spot; wide is an even wash.',
+  'night.green': 'How strongly the near-monochrome picture is tinted green, as these cameras’ colour processing rendered infrared.',
+  'night.eyes': 'Retro-reflection: the brightest small reflectors under the lamp — eyes, above all — glow. At 0 they are merely bright.',
 
-  /* ---------------- framing ---------------- */
-  'framing.aspect': 'Shape of the projected picture, cropped from the camera aperture as a projection mask would. The output file is exactly this shape: choose 1.85 on Super 8 and the file is 1.85 with no bars baked in.',
-  'framing.overscan': 'Negative crops inside the gate, as a projector’s smaller aperture does. Positive shows beyond it: the camera gate’s rounded edge, the frame line, the neighbouring frames, the perforations and the edge of the strip — where the real gauge puts them.',
-  'framing.fps': 'Frame rate of the video produced. At the film rate every film frame becomes one video frame. At anything else film frames are held unevenly — 18 fps on 25 or 24 on 29.97 — which is the cadence every transfer really had.',
-  'framing.dither': 'A little noise added before the picture is quantised to eight bits, so smooth gradients do not band. The grain usually does this already.',
+  /* ---------------- effects ---------------- */
+  'fx.enabled': 'Switches the camera’s digital effects and its fader on. They ship off; they were a button most owners pressed once and then forgot.',
+  'fx.effect': 'The picture effect. Sepia and black-and-white tint the chroma; “old movie” adds a field-rate flicker; mosaic quantises to cells; strobe holds frames; trail mixes in the frame before; negative inverts.',
+  'fx.fader': 'A fade in from black or white at the start of each shot, as pressing REC with the fader armed did. The sound fades in with it.',
+  'fx.faderTime': 'How long the fade in takes, in seconds, picture and sound together. A second and a half was the usual built-in fader.',
+  'fx.size': 'For mosaic, the cell size in DV pixels; for strobe, how many fields a frame is held for.',
 
-  /* ---------------- audio source ---------------- */
-  'audio.enabled': 'Switches the soundtrack processing off and passes the programme through untouched. The projector noise is controlled separately.',
-  'audio.inputGain': 'Level going onto the soundtrack. Drives the magnetic stripe into saturation or the optical track past full modulation.',
-  'audio.channelMode': 'How many channels survive. A film soundtrack is mono: magnetic stripe, optical track and projector speaker are all one channel. Stereo is for 70 mm magnetic prints.',
-  'audio.track': 'How the sound was carried. A magnetic stripe — Super 8 and 70 mm — is hissy and narrow; a variable-area optical track clips hard; variable density distorts softly through the film’s curve; a silent film has no sound but the projector.',
+  /* ---------------- interlace ---------------- */
+  'interlace.enabled': 'Records two fields a frame, each a separate moment. Off records progressive frames, both fields from one instant, which a DV camcorder never did — here to compare.',
+  'interlace.integration': 'Field integration sums adjacent sensor rows in pairs, offset by one row between fields: less vertical resolution per field, less aliasing and twitter. Off reads single rows. The complementary mosaic always uses the pairs.',
+  'interlace.lowerFirst': 'DV is bottom field first in both systems. Turning this off makes the top field the earlier one, which is wrong for DV and makes motion judder on any correctly configured player.',
 
-  /* ---------------- transport ---------------- */
-  'transport.enabled': 'Switches pitch instability off: the film passes the sound head at exactly constant speed.',
-  'transport.wowRate': 'Rate of the slow pitch wander, from a capstan or flywheel out of round. Around once a second.',
-  'transport.wowDepth': 'Depth of the slow wander. Small home projectors had audible wow on sustained notes; cinema machines very little.',
-  'transport.flutterRate': 'Rate of the faster pitch wobble from rollers and sprockets, typically somewhere between 5 and 20 Hz.',
-  'transport.flutterDepth': 'Depth of the faster wobble — a roughness on sustained tones rather than a wavering.',
-  'transport.sprocket': 'The intermittent pull-down leaking through the loop to the sound head, modulating pitch at the frame rate times the perforations per frame: 18 Hz on Super 8, 96 Hz on 35 mm. A specific, faint buzz.',
-  'transport.drift': 'A slow random walk in speed, as belts slip and the motor warms.',
+  /* ---------------- chroma ---------------- */
+  'chroma.enabled': 'Subsamples the colour as DV does: 4:1:1 or 4:2:0. It is forced on while the codec is enabled, because DV cannot code full-resolution colour.',
+  'chroma.upsample': 'How the playback side fills the colour back out to full resolution. Repeat shows the hard four-pixel steps of 4:1:1; interpolation spreads them into a bleed.',
 
-  /* ---------------- magnetic ---------------- */
-  'magnetic.enabled': 'Switches the magnetic stripe’s faults off. Only matters when the soundtrack is magnetic.',
-  'magnetic.hiss': 'Oxide noise. A Super 8 stripe is under a millimetre wide and very noisy; a 70 mm stripe is wider and quieter. Bright, not rumbly.',
-  'magnetic.headWear': 'Treble lost to a worn head and poor contact, on top of the ceiling the film speed already sets: about 7 kHz on Super 8 at 18 fps, rising with the speed.',
-  'magnetic.saturation': 'The oxide running out of headroom on loud passages: soft, symmetric compression.',
-  'magnetic.dropouts': 'Oxide flaked off the stripe, per minute: the sound dips abruptly and recovers.',
-  'magnetic.dropoutDepth': 'How much signal a dropout takes: a small flake of missing oxide dulls the sound, a large one silences it for an instant.',
-  'magnetic.printThrough': 'Level of the echo from the adjacent winding of the reel, magnetised by it during storage. Usually 40–60 dB down: audible in quiet gaps after loud sounds.',
-  'magnetic.printDelay': 'Spacing of the echo: one turn of the reel at projection speed. Small reels near the hub give short delays; full reels long ones.',
-  'magnetic.preEcho': 'Stored heads-out, the echo comes before the sound — a ghostly preview of each word. The live preview cannot look into the future, so it plays the echo after; exports render the true pre-echo.',
+  /* ---------------- codec ---------------- */
+  'codec.enabled': 'Encodes and decodes every frame with the DV codec model: DCT, classes, segment rate control, quantisation and the inverse DCT. Off leaves the camera’s picture uncompressed.',
+  'codec.budget': 'The bits available to each five-macroblock segment, as a multiple of DV’s 25 Mbit/s. At 1 simple pictures are near transparent and busy, noisy ones block; at 0.5 everything does.',
+  'codec.dct248': 'Allows blocks whose two fields differ to use the 2-4-8 transform, coding field sum and difference separately. Off codes interlaced motion with the 8-8 transform, which costs more bits and rings vertically.',
+  'codec.shuffle': 'Builds each segment from five macroblocks scattered across the frame, as DV does, so a busy area borrows bits from quiet ones elsewhere. Off takes five neighbours, and busy areas starve locally while quiet ones are pristine.',
+  'codec.classes': 'Sorts blocks into four activity classes and quantises busy blocks more coarsely. Off treats every block alike.',
 
-  /* ---------------- optical ---------------- */
-  'optical.enabled': 'Switches the optical track’s faults off. Only matters when the soundtrack is optical.',
-  'optical.modulation': 'Programme level against the track’s full width. Under 1 is clean. Over 1 the variable-area trace runs out of track and clips flat and hard; variable density distorts more and more through the curve.',
-  'optical.imageSpread': 'Light spreading within the track’s emulsion: it lowers the treble and fills in the troughs of the trace more than the peaks, adding intermodulation.',
-  'optical.noise': 'Grain in the track, heard as hiss. Variable density’s is louder and darker, which is one reason it was abandoned.',
-  'optical.crackle': 'Dirt specks crossing the slit per second, each a click. With A/V Link on, the picture’s dirt adds to this — the same dirty print.',
-  'optical.crackleLevel': 'Loudness of the biggest crackles. Most are small; a few are loud.',
-  'optical.ticks': 'A damaged frame line or perforation ticking once a frame: a regular click at the frame rate.',
-  'optical.exciterHum': 'Hum from an exciter lamp run on alternating current, at twice the mains frequency with harmonics. Cinemas used DC to avoid it; plenty of machines did not.',
+  /* ---------------- tape ---------------- */
+  'tape.enabled': 'Switches tape errors on: dropouts and head clogs, concealed as a DV decoder conceals them.',
+  'tape.speed': 'SP or LP. LP’s narrower tracks give about three times the dropouts, and the timecode readout shows the longer remaining time.',
+  'tape.dropouts': 'Damaged stretches of track per minute of tape. Each takes some segments from a run of tracks, so blocks drop out all over the frame at once.',
+  'tape.size': 'How much of the damaged tracks is lost. Small takes a few segments and the audio stutters; 1 takes every track of the frame, so the picture freezes and the sound mutes.',
+  'tape.conceal': 'What replaces a lost macroblock: the same macroblock of the previous frame (frozen or misplaced rectangles on the block grid), or grey or green blocks from a decoder that did not conceal.',
+  'tape.clogs': 'Head clogs per minute: the whole picture freezes on the last good frame and breaks into slipping blocks until the head clears.',
+  'tape.clogLength': 'How long a clog lasts, in seconds, before the head cleans itself and the picture returns as suddenly as it went.',
 
-  /* ---------------- playback ---------------- */
-  'playback.enabled': 'Switches the playback EQ and amplifier off, so the track is heard with only its own physical limits — the stripe’s or the slit’s.',
-  'playback.curve': 'The response imposed on playback. The Academy curve rolls off treble from about 2 kHz to roughly −10 dB at 8 kHz; the home projector curve is narrow and mid-forward.',
-  'playback.lowCut': 'Where the bass gives out. Small projectors and speakers lost everything below 100–150 Hz.',
-  'playback.highCut': 'Where the treble gives out, on top of whatever the track already lost.',
-  'playback.drive': 'How hard the amplifier is pushed: from clean to the warm overload of a valve stage or the harsher clip of a small transistor one.',
-  'playback.model': 'Character of the amplifier’s overload. Valves are soft and even-harmonic; a cheap transistor output stage clips one half of the wave before the other.',
-  'playback.hum': 'The amplifier’s own mains hum, at the fundamental and its odd harmonics.',
+  /* ---------------- breaks ---------------- */
+  'breaks.enabled': 'Switches recording breaks on: the tape is a sequence of shots, each a stretch of the world, butted together.',
+  'breaks.rate': 'How often the camera was stopped and started, per minute of source. Each break is a cut, a clunk, a jump of the clock and a fresh autofocus hunt.',
+  'breaks.skip': 'How many seconds of the source go unrecorded at each break, on average. Zero keeps the picture continuous, so the break is only heard and seen on the clock.',
+  'breaks.gap': 'The average time that passed on the wall between shots, in minutes. The date stamp jumps by it; the battery drains a little during it.',
+  'breaks.seamless': 'The camera backs up over the end of the last shot before recording, so the cut is clean and the timecode runs on. Off leaves a garbage frame at the cut and restarts the timecode at zero.',
 
-  /* ---------------- speaker ---------------- */
-  'speaker.enabled': 'Switches the speaker and room off: the amplifier output heard directly.',
-  'speaker.resonanceFreq': 'The cabinet’s main resonance. Small boxes resonate high and boomy; large ones low.',
-  'speaker.resonanceGain': 'How much the box resonance rings. A few decibels gives a small box its boom; a lot is a hollow, one-note bass.',
-  'speaker.honkFreq': 'The midrange peak of a horn or a small cone. Cinema horns honk around 800–1,200 Hz; a projector’s little cone higher.',
-  'speaker.honkGain': 'How nasal the speaker is. Horns were efficient and honky by nature; a few decibels here is the sound of a 1930s picture palace.',
-  'speaker.cabinet': 'How much of the cabinet’s own synthesised response is mixed in — the box sound that EQ alone cannot make, because it rings in time.',
-  'speaker.cabinetSize': 'From the plastic case of a home projector to a cinema horn behind the screen.',
-  'speaker.breakup': 'A small cone distorting when it runs out of travel on loud passages.',
-  'speaker.room': 'Reverberation of the room: a living room or a picture palace.',
-  'speaker.booth': 'Heard from the projection booth: the film’s sound muffled through the booth glass, the projector loud beside you.',
+  /* ---------------- camera display ---------------- */
+  'osd.enabled': 'Draws the camera’s viewfinder display into the chain at the chosen point.',
+  'osd.insert': 'Where the display enters the chain. After decode is the AV output with the display on; before the codec burns it into the recording, which no camera did; on the display draws it on the output’s own pixel grid.',
+  'osd.rec': 'REC with a red dot while recording; STBY once the battery has died and the camera has stopped.',
+  'osd.counter': 'The tape counter in hours, minutes and seconds — tape time, which runs straight across breaks — or the minutes of tape remaining.',
+  'osd.battery': 'The battery gauge with up to four bars. It follows the Battery section when that is on, and blinks when nearly empty.',
+  'osd.zoomBar': 'The W–T bar with its marker, shown while the zoom is moving, and the digital magnification once past the optical range.',
+  'osd.mode': 'The recording mode: SP or LP, 12-bit or 16-bit audio, and 16:9 when the camera is in its wide mode.',
+  'osd.warnings': 'Lets the low-battery warning blink. Off shows the gauge steadily however empty.',
+  'osd.colour': 'The character generator’s ink: white, or yellow as some cameras used. The black edge is always there, so it reads on any picture.',
 
-  /* ---------------- projector noise ---------------- */
-  'projnoise.enabled': 'Switches the projector’s own noise off. Off for a telecine transfer; on for anything that should feel watched in a room.',
-  'projnoise.level': 'Overall loudness of the machine in the room. A home projector a metre away is loud enough to talk over; a booth projector through a wall is a faint rhythm.',
-  'projnoise.claw': 'The intermittent pull-down striking once a frame — the clatter. Locked to the frame rate, and through the A/V Link to how hard the claw struck that frame in the picture.',
-  'projnoise.tone': 'Pitch of the mechanism’s resonances. A small plastic home projector rings high; a big cast-iron cinema machine low.',
-  'projnoise.wear': 'Slack in the mechanism: uneven strikes and a second, later rattle on each frame.',
-  'projnoise.shutter': 'Air from the shutter blades and the lamp fan, chopped at the blade rate.',
-  'projnoise.motor': 'The motor’s hum at the mains frequency and the whine of its gearing, which rises and falls slightly with the load.',
-  'projnoise.distance': 'From beside you on the coffee table to behind the projection-booth wall. Distance dulls the clatter and lowers it.',
+  /* ---------------- date ---------------- */
+  'date.enabled': 'Draws the date and time of recording into the chain at the chosen point.',
+  'date.insert': 'Where the date enters the chain. Before the codec is an imprint, as analogue cameras did; after decode is DV’s data code drawn at playback; on the display is sharp on the output’s pixels.',
+  'date.format': 'Regional date order: JAN 15 2003 as American cameras showed it, 15.1.2003 as European ones did, or 2003 1 15.',
+  'date.clock': '12-hour time with AM and PM, as American cameras showed it, or 24-hour as most others did.',
+  'date.year': 'The year the first shot was taken. The clock runs on from the date and time set here.',
+  'date.month': 'The month the first shot was taken, 1 to 12. The clock runs on from here, across midnight and the end of the month.',
+  'date.day': 'The day of the month the first shot was taken. A day past the month’s end is taken as its last day.',
+  'date.hour': 'The time of day of the first shot, in hours as a decimal: 8.25 is quarter past eight in the morning.',
+  'date.unset': 'The camera’s clock was never set, so every recording is stamped with its factory default — midnight on the first of January 2000 — and runs on from there.',
+  'date.colour': 'The ink of the date characters. Orange was the colour of many analogue imprints.',
+
+  /* ---------------- capture ---------------- */
+  'capture.enabled': 'Switches the capture stage on. With it off, or set to FireWire, the decoded DV is the picture.',
+  'capture.path': 'FireWire copies the stream exactly. S-Video sends luma and chroma separately to an analogue card. Composite sends one signal and the card must separate colour from brightness.',
+  'capture.decoder': 'How a composite card separates chroma: a notch filter is cheap, soft and full of cross-colour; a two-line comb is sharper but fringes where colour changes vertically.',
+  'capture.bandwidth': 'The analogue path’s luma bandwidth in MHz. 4.2 is broadcast NTSC; a cheap card or a long cable is closer to 3. Lower is softer.',
+  'capture.chromaDelay': 'Colour arriving late through the card’s chroma path, in DV pixels: colour shifted right of the edges it belongs to.',
+  'capture.noise': 'Noise picked up on the cable and in the card, added to the analogue signal before it is decoded.',
+  'capture.levels': 'Studio levels map reference white to white and clip the superwhites; full range shows the whole coding range, superwhites included, with greyish blacks.',
+
+  /* ---------------- deinterlace ---------------- */
+  'deint.enabled': 'Applies a deinterlacer. Off shows the full woven frame, which is what a progressive display does with interlaced video by default.',
+  'deint.mode': 'Weave keeps both fields (combing), bob shows each field line-doubled (twitter), blend averages them (ghosts), discard keeps one field (half resolution).',
+
+  /* ---------------- upload ---------------- */
+  'upload.enabled': 'Passes the picture through a 2006 web upload: a field discarded, a small raster, a low frame rate and a second codec.',
+  'upload.width': 'The upload’s width in pixels; the height follows the aspect. 320 was the standard of the early video sites.',
+  'upload.fps': 'Frames kept per second. Frames are held between, so motion steps; 15 was common to save bandwidth.',
+  'upload.quality': 'The second codec’s quantiser step. Higher is blockier, with blocks eight pixels on the small raster — over thirty on a 1080p screen.',
+
+  /* ---------------- output ---------------- */
+  'framing.aspect': 'The shape of the output frame. As recorded follows the camera’s 4:3 or 16:9 flag; forcing the other crops the picture to fill rather than adding bars.',
+  'framing.overscan': 'Shows the full 720 samples of the raster rather than the 704-wide active picture that 4:3 and 16:9 refer to. The edges were never meant to be seen.',
+  'framing.scaler': 'How the DV raster is enlarged to the output: nearest shows the pixels as blocks; bilinear is soft; good resampling is a sharper windowed kernel.',
+  'framing.fps': 'One output frame per DV frame (29.97 or 25), or one per field (59.94 or 50), each showing its own field — what bob deinterlacing needs to be smooth.',
+  'framing.dither': 'Dither added when writing 8-bit output, in code values. It breaks up banding in smooth gradients; zero is undithered.',
+
+  /* ---------------- audio ---------------- */
+  'audio.enabled': 'Records the sound through the camera’s chain. Off passes the source’s soundtrack through untouched.',
+  'audio.mode': '16-bit at 48 kHz, or the non-linear 12-bit code at 32 kHz, which is band-limited near 15 kHz and quantises loud passages more coarsely.',
+  'audio.inputGain': 'The level of the source’s sound at the microphone, in dB. The automatic gain then fights whatever you set here.',
+  'audio.channels': 'The camera’s stereo microphone, or the two channels summed to mono as many cameras effectively recorded them.',
+  'audio.output': 'The level of everything you hear here and in exports, in dB, after the recording. It changes nothing about how the camera recorded.',
+
+  /* ---------------- microphone ---------------- */
+  'mic.enabled': 'Switches the microphone model on: the capsule’s response, the room tone and the wind.',
+  'mic.low': 'The capsule’s low cut in Hz. A small camera microphone has little below 100–150 Hz.',
+  'mic.high': 'The capsule’s high cut in Hz. 12 kHz is a cheap capsule; 16 kHz and up a good one, which 12-bit recording would cut anyway.',
+  'mic.presence': 'A peak in the upper midrange, around 4 kHz, in dB: the forward, slightly harsh voice of a camcorder microphone.',
+  'mic.room': 'The level of the room’s air and the preamp’s hiss, in dB. Quiet in itself; the automatic gain lifts it in every pause.',
+  'mic.wind': 'Wind across the grille: low, gusting rumble that overloads the microphone. The wind cut thins it.',
+  'mic.windCut': 'The wind filter: everything below about 200 Hz removed, wind and voice alike.',
+
+  /* ---------------- camera noise ---------------- */
+  'mech.enabled': 'Lets the microphone hear the camera. With the source silent, this is the camera’s whole soundtrack.',
+  'mech.transport': 'The head drum’s whine and the capstan, in dB. The drum turns at 9000 rpm, so its fundamental is about 150 Hz and locked to the frame rate.',
+  'mech.zoom': 'The zoom motor at full speed, in dB: a whirr and a gear buzz that rise in pitch with the zoom’s speed.',
+  'mech.focus': 'The focus motor’s ticks while the autofocus hunts, in dB: a fast train of clicks, quicker as the hunt moves faster.',
+  'mech.rec': 'The REC button’s clunk at the start of every shot, in dB, recorded as the first thing on the shot.',
+  'mech.handling': 'A hand shifting its grip, in dB: the thump of each bump and the rustle round it.',
+
+  /* ---------------- AGC ---------------- */
+  'agc.enabled': 'Switches the automatic gain control on: the pumping and breathing of consumer camera sound.',
+  'agc.target': 'The level the AGC tries to hold, in dBFS. Higher is louder and closer to the limit.',
+  'agc.maxGain': 'The most it will turn up a quiet passage, in dB. 20–30 dB makes a silent room roar with its own air.',
+  'agc.attack': 'How quickly the gain comes down when something loud happens, in milliseconds. Fast ducks everything at once.',
+  'agc.release': 'How slowly the gain comes back up afterwards, in seconds. A second or more is the audible breathing.',
 
   /* ---------------- link ---------------- */
-  'link.enabled': 'Switches all the picture–sound couplings off, leaving two separate effects.',
-  'link.weaveToClatter': 'How much the claw’s strike, which also throws the frame in the gate, sets the loudness of that frame’s clack. A frame that jumps is a frame that clacks.',
-  'link.spliceToPop': 'How loudly a splice is heard as it passes the sound head, at the moment the picture jumps.',
-  'link.dirtToCrackle': 'How much the picture’s dirt adds crackle to an optical track. Dirt on the print is on the track as well.',
-  'link.lampToHum': 'How much the projector lamp’s ripple is heard as exciter hum. One supply feeds both, so a flickering picture hums.',
-  'link.speedToPitch': 'How much a camera’s speed drift carries into the pitch of the sound recorded with it. A camera running slow recorded its sound slow.',
-  'link.audioToLamp': 'How much loud passages dim the lamp, through a shared supply sagging under the amplifier’s draw.',
+  'link.enabled': 'Switches all the picture–sound couplings off, leaving the picture and the sound as two separate effects.',
+  'link.zoomMotor': 'How much the zoom’s speed drives the zoom motor’s whirr. The motor is heard only while the zoom moves.',
+  'link.focusTicks': 'How much a focus hunt in the picture is heard as the focus motor ticking, at the same moments.',
+  'link.breakClunk': 'How loud the REC clunk and the cut are at each recording break, at the frame the picture cuts.',
+  'link.dropoutMute': 'How much a dropout mutes or stutters the sound. The audio is on the same damaged tracks as the picture.',
+  'link.bumpThump': 'How loud a handling bump’s thump is, at the moment the frame jolts.',
+  'link.frameWhine': 'How tightly the transport’s whine is locked to the frame rate. At 0 the drum wanders in pitch like an unlocked motor.',
 };

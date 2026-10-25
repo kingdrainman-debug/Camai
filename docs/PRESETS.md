@@ -1,186 +1,161 @@
 # Presets
 
-Generated from `src/core/presets.ts` by `node scripts/docs.mjs`. Each preset is a particular piece of film in a particular state rather than an intensity level. Use the id with the command line: `filmbox --input in.mp4 --output out.mp4 --preset super8-1974`.
+Generated from `src/core/presets.ts` by `node scripts/docs.mjs`. Each preset is a particular camera in a particular situation — a machine, a year, a light, an operator, a tape — rather than an intensity level. Use the id with the command line: `camai --input in.mp4 --output out.mp4 --preset palmcorder-2002`.
 
 | id | name |
 |---|---|
-| `super8-1974` | Super 8 Kodachrome, 1974 |
-| `reference` | Super 8, Fresh From the Lab |
-| `reg8-1958` | Regular 8, Silent Holiday, 1958 |
-| `news16-1974` | 16 mm News Film, as Broadcast, 1974 |
-| `print35-4th` | 35 mm Release Print, Fourth Generation |
-| `faded-eastman` | Faded Eastman, 16 mm Reduction Print |
-| `loft` | Home Movie Found in a Loft |
-| `vision3-scan` | 35 mm Vision3 500T, Scanned |
-| `remjet` | Backing Removed |
-| `trix16-1993` | Tri-X Reversal, 16 mm, 1993 |
-| `technicolor-1954` | Technicolor Dye Transfer, 1954 |
-| `newsreel` | 35 mm Newsreel, Second Generation |
-| `roadshow70` | 65 mm Roadshow |
+| `palmcorder-2002` | MiniDV palmcorder, 2002 |
+| `christmas-2002` | Christmas morning, 2002 |
+| `skate-2001` | Skate video, 2001 |
+| `wedding-lp-2004` | Wedding reception, LP mode, 2004 |
+| `night-woods` | Night mode in the woods |
+| `found-tape-2006` | Found tape, captured in 2006 |
+| `clock-never-set` | The camera whose clock was never set |
+| `prosumer-2003` | Three-chip camera on a tripod, 2003 |
+| `cmos-2007` | CMOS palmcorder, 2007 |
+| `found-footage-imitation` | Found-footage imitation |
 
-## Super 8 Kodachrome, 1974
+## MiniDV palmcorder, 2002
 
-`super8-1974`
+`palmcorder-2002`
 
-A 50 ft Kodachrome 40 sound cartridge, shot in daylight through the camera’s built-in 85 filter on a cheap zoom, projected at home a dozen times since. The flagship: 18 fps, reversal, a soft slow lens, a plastic pressure plate and a cartridge that pipes light along its perforated edge.
+A single-chip MiniDV palmcorder from 2002 on an ordinary afternoon: a 1/4-inch CCD under a complementary mosaic, a 10× zoom, automatic everything, the detail enhancer of its day, the LCD display on its AV output, and a battery that is not new. The flagship: fields, the codec, sharpening and smear, a date that jumps at every break, and a zoom you can hear.
 
-- Gauge: Super 8
-- Stock: Kodachrome 40 Type A
-- Camera speed: Native for the gauge
-- Age: 50 years
+- System: 525/60 (NTSC)
+- Tape: MiniDV
+- Sensor: Single CCD, complementary mosaic
+- Sensor size: 1/4 inch (3.6 × 2.7 mm)
+- Aspect: 4:3
+- Scene light: 6 stops
+- Light: Daylight (5600 K)
+- Recording mode: 12-bit, 32 kHz, four channels
 
-## Super 8, Fresh From the Lab
+## Christmas morning, 2002
 
-`reference`
+`christmas-2002`
 
-The same Kodachrome cartridge the week it came back from processing: the emulsion, the lens and the camera, with no dirt, no fading and nothing worn. Start here to see what the stock alone does.
+The same single-chip MiniDV palmcorder indoors under tungsten bulbs: the automatic white balance gives up two-thirds of the way and leaves everything orange, the gain is up and the noise is in the signal before the codec, which then starves for bits everywhere. 12-bit sound, the AGC breathing between voices, and the LCD display on the AV output.
 
-- Gauge: Super 8
-- Stock: Kodachrome 40 Type A
-- Camera speed: Native for the gauge
+- System: 525/60 (NTSC)
+- Tape: MiniDV
+- Sensor: Single CCD, complementary mosaic
+- Sensor size: 1/6 inch (2.4 × 1.8 mm)
+- Aspect: 4:3
+- Scene light: -1 stops
+- Light: Tungsten (3200 K)
+- Recording mode: 12-bit, 32 kHz, four channels
 
-## Regular 8, Silent Holiday, 1958
+## Skate video, 2001
 
-`reg8-1958`
+`skate-2001`
 
-A 25 ft spool run twice through a spring-wound camera on a beach holiday, silent, and shown on a three-blade projector that has since been filmed off the living-room wall. The motor slows as the spring runs down, so frames get longer and brighter, and motion speeds up on the screen.
+A three-chip DV camera with a fisheye adapter screwed on, in hard sun: the camera raises the shutter to 1/1000 s and beyond rather than stop down into diffraction, so motion is staccato and blur-free; the detail enhancer is turned up; the operator is running alongside, bumping and whipping. 16-bit sound full of wind and wheels.
 
-- Gauge: Regular 8 (Double 8)
-- Stock: Kodachrome 40 Type A
-- Camera speed: Native for the gauge
-- Soundtrack: Silent film
-- Age: 66 years
-- Storage: Cool cupboard
+- System: 525/60 (NTSC)
+- Tape: MiniDV
+- Sensor: Three CCDs on a prism
+- Sensor size: 1/3 inch (4.8 × 3.6 mm)
+- Aspect: 4:3
+- Adapter: Fisheye (0.3×)
+- Scene light: 10 stops
 
-## 16 mm News Film, as Broadcast, 1974
+## Wedding reception, LP mode, 2004
 
-`news16-1974`
+`wedding-lp-2004`
 
-Ektachrome Video News Film shot on a shoulder camera, processed in a hurry and run straight through a telecine onto air: reversal, optical sound, and the 3:2 judder of 24 fps film on 29.97 fps television.
+A PAL MiniDV palmcorder recording in LP to make the tape last the evening: low light under household bulbs, the gain at its limit, dancing that combs on every frame, dropouts from the narrower tracks, recording breaks between the speeches, and an AGC that pumps with the music and breathes in the pauses.
 
-- Gauge: 16 mm
-- Stock: Ektachrome VNF 7240
-- Camera speed: Native for the gauge
-- Soundtrack: Optical, variable area
-- Aspect: 1.33 (4:3)
-- Output rate: 29.97 (NTSC)
+- System: 625/50 (PAL)
+- Tape: MiniDV
+- Sensor: Single CCD, complementary mosaic
+- Sensor size: 1/6 inch (2.4 × 1.8 mm)
+- Aspect: 4:3
+- Scene light: -2 stops
+- Light: Household bulb (2800 K)
+- Speed: LP (12.56 mm/s)
 
-## 35 mm Release Print, Fourth Generation
+## Night mode in the woods
 
-`print35-4th`
+`night-woods`
 
-A 1978 feature on Eastman 5247, duplicated through an interpositive and internegative twice more for a late run, printed on 5381, shown in a lot of cinemas and then kept at room temperature for forty-five years. Contrasty, grainy, dirty, turning pink, with a cue mark at the end of every reel.
+An infrared night mode on a single-chip palmcorder: the IR-cut filter swung out and the camera’s own infrared lamp lit, so the woods are a green monochrome with a hot spot in the middle that falls away into black, eyes that glow, a slow shutter that smears and stutters, the gain flat out, and the AGC lifting the room tone — the forest — between footsteps.
 
-- Gauge: 35 mm Academy
-- Stock: Eastman Color Negative II 5247
-- Camera speed: Native for the gauge
-- Print stock: Eastman Color Print 5381
-- Soundtrack: Optical, variable area
-- Aspect: 1.85 American
-- Age: 45 years
+- System: 525/60 (NTSC)
+- Tape: MiniDV
+- Sensor: Single CCD, complementary mosaic
+- Sensor size: 1/4 inch (3.6 × 2.7 mm)
+- Aspect: 4:3
+- Scene light: -4 stops
+- Shutter: 1/30 s (slow)
+- Recording mode: 12-bit, 32 kHz, four channels
 
-## Faded Eastman, 16 mm Reduction Print
+## Found tape, captured in 2006
 
-`faded-eastman`
+`found-tape-2006`
 
-A 16 mm television print of a 1975 feature, struck on Eastman Color Print 5381 and kept for decades in a broadcaster’s warm store. The cyan dye has gone and much of the yellow with it: everything is pink-magenta, and no amount of saturation brings it back.
+A MiniDV tape recorded on a palmcorder, found years later, played in the camera and captured through a cheap composite card, one field thrown away, scaled to 320 × 240, re-encoded at 15 frames a second for a 2006 video site. A chain of generations, each with its own loss.
 
-- Gauge: 16 mm
-- Stock: Eastman Color Negative II 5247
-- Camera speed: Native for the gauge
-- Print stock: Eastman Color Print 5381
-- Soundtrack: Optical, variable area
-- Aspect: 1.33 (4:3)
-- Age: 48 years
-- Storage: Warm and humid
+- System: 525/60 (NTSC)
+- Tape: MiniDV
+- Sensor: Single CCD, complementary mosaic
+- Sensor size: 1/4 inch (3.6 × 2.7 mm)
+- Aspect: 4:3
+- Scene light: 3 stops
+- Light: Overcast or shade (7500 K)
+- Path: Composite to a capture card
+- Recording mode: 12-bit, 32 kHz, four channels
 
-## Home Movie Found in a Loft
+## The camera whose clock was never set
 
-`loft`
+`clock-never-set`
 
-A Super 8 Ektachrome 160 cartridge from 1977, shot indoors without a lamp, put in a biscuit tin and left in a damp loft for forty-eight years. The acetate has started to turn, something has grown on it, and water got in once.
+The flagship palmcorder bought, charged and used without ever setting its clock: every shot is stamped with the factory default, starting at midnight on the first of January 2000 and running on from there.
 
-- Gauge: Super 8
-- Stock: Ektachrome 160 Type A
-- Camera speed: Native for the gauge
-- Age: 48 years
-- Storage: Warm and humid
+- System: 525/60 (NTSC)
+- Tape: MiniDV
+- Sensor: Single CCD, complementary mosaic
+- Sensor size: 1/4 inch (3.6 × 2.7 mm)
+- Aspect: 4:3
+- Scene light: 5 stops
 
-## 35 mm Vision3 500T, Scanned
+## Three-chip camera on a tripod, 2003
 
-`vision3-scan`
+`prosumer-2003`
 
-Modern night exteriors on 5219, scanned rather than printed: the negative’s full latitude, grain in the shadows, a red halo round every practical light, and no dirt at all.
+A three-chip prosumer DV camera handled properly: on sticks, white-balanced by hand, exposure locked, gain off, the detail enhancer at a sensible setting. The clean end of the format, where what is left is DV itself — interlace, 4:1:1 colour and the 8×8 blocks in a busy frame.
 
-- Gauge: Super 35 (full aperture)
-- Stock: Vision3 500T 5219
-- Camera speed: Native for the gauge
-- Process: Scanned negative
-- Soundtrack: Optical, variable area
-- Aspect: 2.39 Scope
-- Output rate: 24
+- System: 525/60 (NTSC)
+- Tape: MiniDV
+- Sensor: Three CCDs on a prism
+- Sensor size: 1/3 inch (4.8 × 3.6 mm)
+- Aspect: 4:3
+- Scene light: 7 stops
+- Light: Daylight (5600 K)
 
-## Backing Removed
+## CMOS palmcorder, 2007
 
-`remjet`
+`cmos-2007`
 
-The same 500T with its anti-halation layer stripped off before processing, as CineStill does for still cameras. Every light source blooms into a red-orange halo.
+One of the first CMOS consumer camcorders, still recording DV: no smear any more, a rolling shutter instead, so verticals lean on every pan and a whip pan bends the world. Otherwise the familiar automatic camera and its display.
 
-- Gauge: Super 35 (full aperture)
-- Stock: Vision3 500T 5219
-- Camera speed: Native for the gauge
-- Process: Scanned negative
-- Aspect: 1.85 American
-- Output rate: 24
+- System: 525/60 (NTSC)
+- Tape: MiniDV
+- Sensor: Single CMOS, Bayer mosaic
+- Sensor size: 1/3.6 inch (4.0 × 3.0 mm)
+- Aspect: 4:3
+- Scene light: 7 stops
 
-## Tri-X Reversal, 16 mm, 1993
+## Found-footage imitation
 
-`trix16-1993`
+`found-footage-imitation`
 
-Black-and-white reversal pushed a stop for a music video: silver grain, crushed blacks, a hand-held Bolex with a hair in the gate, transferred on a telecine at 25 fps.
+Not a camera but a convention: the REC indicator, the battery and the date burned into the picture before the codec, the way later films imitated home video. Labelled honestly — a real camera never recorded its own display to tape — and here because the difference is visible: the overlay rings and bleeds with the picture instead of sitting crisply on top.
 
-- Gauge: 16 mm
-- Stock: Tri-X Reversal 7266
-- Camera speed: Native for the gauge
-- Aspect: 1.33 (4:3)
-- Output rate: 25 (PAL)
-
-## Technicolor Dye Transfer, 1954
-
-`technicolor-1954`
-
-A three-strip-era feature printed by dye transfer: no silver, purer dyes, colours that have not moved in seventy years, a two-blade projector in a big hall and a variable-density optical track through the Academy curve.
-
-- Gauge: 35 mm Academy
-- Stock: Eastman Color Negative II 5247
-- Camera speed: Native for the gauge
-- Print stock: Technicolor dye transfer (IB)
-- Soundtrack: Optical, variable density
-- Aspect: 1.37 Academy
-- Output rate: 24
-- Age: 70 years
-
-## 35 mm Newsreel, Second Generation
-
-`newsreel`
-
-Black-and-white Double-X negative, duplicated once and printed for distribution, run through every cinema in the country. Silver does not fade, but everything else has happened to it.
-
-- Gauge: 35 mm Academy
-- Stock: Double-X 7222
-- Camera speed: Native for the gauge
-- Print stock: Fine Grain Positive 2302 (B&W)
-- Soundtrack: Optical, variable density
-- Aspect: 1.37 Academy
-
-## 65 mm Roadshow
-
-`roadshow70`
-
-Shot on 65 mm Vision3 50D and shown as a 70 mm print with magnetic stripes: almost no grain, almost no weave, and six-track magnetic sound so clean the projector is the loudest flaw in the room.
-
-- Gauge: 65 mm (5-perf)
-- Stock: Vision3 50D 5203
-- Camera speed: Native for the gauge
-- Output rate: 24
+- System: 525/60 (NTSC)
+- Tape: MiniDV
+- Sensor: Single CCD, complementary mosaic
+- Sensor size: 1/6 inch (2.4 × 1.8 mm)
+- Aspect: 4:3
+- Scene light: -1.5 stops
+- Recording mode: 12-bit, 32 kHz, four channels
 

@@ -9,12 +9,12 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
-contextBridge.exposeInMainWorld('filmbox', {
+contextBridge.exposeInMainWorld('camai', {
   isDesktop: true,
   platform: process.platform,
   // Set by the main process via webPreferences.additionalArguments. More
   // reliable than sniffing the URL, which does not survive loadFile cleanly.
-  isBatch: process.argv.includes('--filmbox-batch'),
+  isBatch: process.argv.includes('--camai-batch'),
 
   openMedia: () => ipcRenderer.invoke('dialog:openMedia'),
   chooseSavePath: (defaultName, filters) =>

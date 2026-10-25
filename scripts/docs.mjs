@@ -17,7 +17,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = resolve(fileURLToPath(new URL('.', import.meta.url)), '..');
 const entry = join(root, '.docs-entry.ts');
-const out = await mkdtemp(join(tmpdir(), 'filmbox-docs-'));
+const out = await mkdtemp(join(tmpdir(), 'camai-docs-'));
 
 try {
   await writeFile(
@@ -42,13 +42,13 @@ try {
   };
 
   let md = `# Presets\n\n`;
-  md += `Generated from \`src/core/presets.ts\` by \`node scripts/docs.mjs\`. Each preset is a particular piece of film in a particular state rather than an intensity level. Use the id with the command line: \`filmbox --input in.mp4 --output out.mp4 --preset super8-1974\`.\n\n`;
+  md += `Generated from \`src/core/presets.ts\` by \`node scripts/docs.mjs\`. Each preset is a particular camera in a particular situation — a machine, a year, a light, an operator, a tape — rather than an intensity level. Use the id with the command line: \`camai --input in.mp4 --output out.mp4 --preset palmcorder-2002\`.\n\n`;
   md += `| id | name |\n|---|---|\n`;
   for (const p of m.PRESETS) md += `| \`${p.id}\` | ${p.name} |\n`;
   md += `\n`;
   for (const p of m.PRESETS) {
     md += `## ${p.name}\n\n\`${p.id}\`\n\n${p.description}\n\n`;
-    const pick = ['format.gauge', 'format.stock', 'format.fps', 'print.stock', 'print.process', 'audio.track', 'framing.aspect', 'framing.fps', 'fade.years', 'fade.storage'];
+    const pick = ['format.system', 'format.tape', 'format.sensor', 'format.sensorSize', 'format.aspect', 'lens.adapter', 'exposure.scene', 'exposure.shutter', 'wb.light', 'tape.speed', 'capture.path', 'audio.mode'];
     const lines = pick
       .filter((k) => p.settings[k] !== undefined && (p.settings[k] !== m.DEFAULTS[k] || k.startsWith('format.')))
       .map((k) => `- ${label(k, p.settings[k])}`);

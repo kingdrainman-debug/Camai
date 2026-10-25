@@ -1,96 +1,118 @@
 // Shared helpers, concatenated after the #version line of every fragment shader.
+//
+// Conventions, the same in every pass and in the CPU mirror (src/video/cpu):
+//
+//   - Every image is addressed by integer texel (x, y) with y = 0 the TOP row,
+//     i.e. ivec2(gl_FragCoord.xy) taken at face value. Sources are uploaded
+//     without a flip, so their row 0 is the top too. Only the final draw to
+//     the canvas flips. (gl_FragCoord is the pixel centre with its origin
+//     bottom-left: a mirror using top-left integer indices without this
+//     agreement is half a pixel out and upside down, which for a block codec
+//     is fatal.)
+//   - Filtering is done by hand with texelFetch, so both backends interpolate
+//     with the same weights and float targets need no linear-filter extension.
+//   - Random numbers come from an integer hash identical to the event clock's
+//     (Math.imul there, uint arithmetic here), never from a float hash.
 precision highp float;
+precision highp int;
 precision highp sampler2D;
 
 const float PI = 3.141592653589793;
 const float TAU = 6.283185307179586;
 
-/* ---------------- hashing & noise ---------------- */
+/* ---------------- integer hashing ---------------- */
 
-float hash11(float p) {
-  p = fract(p * 0.1031);
-  p *= p + 33.33;
-  p *= p + p;
-  return fract(p);
+// ihash() from camai-events.js, bit for bit.
+uint uhash(int a, int b, int c) {
+  uint h = (uint(a) * 0x9e3779b1u) ^ ((uint(b) + 0x632be5abu) * 0x85ebca77u) ^ ((uint(c) + 0x1b873593u) * 0xc2b2ae3du);
+  h ^= h >> 16;
+  h *= 0x7feb352du;
+  h ^= h >> 15;
+  h *= 0x846ca68bu;
+  h ^= h >> 16;
+  return h;
 }
 
-float hash12(vec2 p) {
-  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
-  p3 += dot(p3, p3.yzx + 33.33);
-  return fract((p3.x + p3.y) * p3.z);
+float ihash(int a, int b, int c) {
+  return float(uhash(a, b, c) >> 8) / 16777216.0;
 }
 
-vec2 hash22(vec2 p) {
-  vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
-  p3 += dot(p3, p3.yzx + 33.33);
-  return fract((p3.xx + p3.yz) * p3.zy);
+// A standard normal deviate from two hashes (Box–Muller).
+float gaussHash(int a, int b, int c) {
+  float u1 = max(ihash(a, b, c), 1.0 / 16777216.0);
+  float u2 = ihash(a, b, c + 7919);
+  return sqrt(-2.0 * log(u1)) * cos(TAU * u2);
 }
 
-vec3 hash32(vec2 p) {
-  vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
-  p3 += dot(p3, p3.yxz + 33.33);
-  return fract((p3.xxy + p3.yzz) * p3.zyx);
+/* ---------------- fetching ---------------- */
+
+vec4 fetch(sampler2D s, int x, int y) {
+  ivec2 sz = textureSize(s, 0);
+  return texelFetch(s, ivec2(clamp(x, 0, sz.x - 1), clamp(y, 0, sz.y - 1)), 0);
 }
 
-float vnoise(vec2 p) {
-  vec2 i = floor(p);
-  vec2 f = fract(p);
-  f = f * f * (3.0 - 2.0 * f);
-  float a = hash12(i);
-  float b = hash12(i + vec2(1.0, 0.0));
-  float c = hash12(i + vec2(0.0, 1.0));
-  float d = hash12(i + vec2(1.0, 1.0));
+// Bilinear at a texel-space position (centres at +0.5), clamped at the edges.
+vec4 bilinear(sampler2D s, vec2 p) {
+  vec2 q = p - 0.5;
+  vec2 f0 = floor(q);
+  vec2 f = q - f0;
+  int x0 = int(f0.x);
+  int y0 = int(f0.y);
+  vec4 a = fetch(s, x0, y0);
+  vec4 b = fetch(s, x0 + 1, y0);
+  vec4 c = fetch(s, x0, y0 + 1);
+  vec4 d = fetch(s, x0 + 1, y0 + 1);
   return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
 
-float fbm(vec2 p) {
-  float v = 0.0;
-  float amp = 0.5;
-  for (int i = 0; i < 4; i++) {
-    v += amp * vnoise(p);
-    p *= 2.03;
-    amp *= 0.5;
-  }
-  return v;
+int mirrorIndex(int i, int n) {
+  int p = 2 * n;
+  int k = i - p * int(floor(float(i) / float(p)));
+  return k < n ? k : p - 1 - k;
+}
+
+// Bilinear with mirrored repeat: the world past the edge of the source.
+vec4 bilinearMirror(sampler2D s, vec2 p) {
+  ivec2 sz = textureSize(s, 0);
+  vec2 q = p - 0.5;
+  vec2 f0 = floor(q);
+  vec2 f = q - f0;
+  int x0 = mirrorIndex(int(f0.x), sz.x);
+  int x1 = mirrorIndex(int(f0.x) + 1, sz.x);
+  int y0 = mirrorIndex(int(f0.y), sz.y);
+  int y1 = mirrorIndex(int(f0.y) + 1, sz.y);
+  vec4 a = texelFetch(s, ivec2(x0, y0), 0);
+  vec4 b = texelFetch(s, ivec2(x1, y0), 0);
+  vec4 c = texelFetch(s, ivec2(x0, y1), 0);
+  vec4 d = texelFetch(s, ivec2(x1, y1), 0);
+  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
 
 /* ---------------- colour ---------------- */
 
-// The colour space NTSC actually transmits in: one wideband luma channel and
-// two narrowband colour-difference channels sharing a quadrature subcarrier.
-vec3 rgb2yiq(vec3 c) {
-  return vec3(
-    dot(c, vec3(0.299, 0.587, 0.114)),
-    dot(c, vec3(0.5959, -0.2746, -0.3213)),
-    dot(c, vec3(0.2115, -0.5227, 0.3112)));
+float srgbToLinear(float c) {
+  return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4);
 }
 
-vec3 yiq2rgb(vec3 c) {
-  return vec3(
-    c.x + 0.9560 * c.y + 0.6190 * c.z,
-    c.x - 0.2720 * c.y - 0.6470 * c.z,
-    c.x - 1.1060 * c.y + 1.7030 * c.z);
+float linearToSrgb(float c) {
+  return c <= 0.0031308 ? c * 12.92 : 1.055 * pow(c, 1.0 / 2.4) - 0.055;
 }
 
-float luma(vec3 c) {
+vec3 srgbToLinear3(vec3 c) {
+  return vec3(srgbToLinear(c.r), srgbToLinear(c.g), srgbToLinear(c.b));
+}
+
+// BT.601, the matrix DV is coded in. Y′ 0..1 is black to reference white;
+// Cb and Cr are centred on zero, ±0.5 at full scale.
+vec3 rgbToYcc(vec3 c) {
+  float y = dot(c, vec3(0.299, 0.587, 0.114));
+  return vec3(y, (c.b - y) / 1.772, (c.r - y) / 1.402);
+}
+
+vec3 yccToRgb(vec3 c) {
+  return vec3(c.x + 1.402 * c.z, c.x - 0.344136 * c.y - 0.714136 * c.z, c.x + 1.772 * c.y);
+}
+
+float luma601(vec3 c) {
   return dot(c, vec3(0.299, 0.587, 0.114));
-}
-
-vec3 safePow(vec3 c, float g) {
-  return pow(max(c, vec3(0.0)), vec3(g));
-}
-
-/* ---------------- misc ---------------- */
-
-float gauss(float x, float sigma) {
-  return exp(-(x * x) / (2.0 * sigma * sigma));
-}
-
-// Interleaved gradient noise: a cheap ordered dither with no visible pattern.
-float ign(vec2 p) {
-  return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
-}
-
-float remap(float v, float a, float b) {
-  return clamp((v - a) / max(b - a, 1e-5), 0.0, 1.0);
 }

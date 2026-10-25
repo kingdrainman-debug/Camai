@@ -7,8 +7,13 @@ export interface OpenedMedia {
 }
 
 export interface EncodeStartOptions {
-  format: 'h264' | 'hevc' | 'prores' | 'gif';
+  format: 'h264' | 'hevc' | 'prores' | 'dv' | 'gif';
   fps: number;
+  /** Exact rate as a rational, e.g. "30000/1001", which DV insists on. */
+  rate?: string;
+  /** For DV: which system, and the picture's aspect. */
+  dvSystem?: 'ntsc' | 'pal';
+  dvAspect?: '4:3' | '16:9';
   quality: number;
   outputPath: string;
   width?: number;
@@ -61,12 +66,12 @@ export interface DesktopBridge {
 
 declare global {
   interface Window {
-    filmbox?: DesktopBridge;
+    camai?: DesktopBridge;
   }
 }
 
 export const desktop: DesktopBridge | null =
-  typeof window !== 'undefined' && window.filmbox ? window.filmbox : null;
+  typeof window !== 'undefined' && window.camai ? window.camai : null;
 
 export const isDesktop = !!desktop;
 

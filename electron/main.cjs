@@ -1,13 +1,13 @@
 /*
- * FILMBOX desktop shell.
+ * CAMAI desktop shell.
  *
  * The renderer is the same web app that runs at a URL; everything this process
  * adds is the stuff a browser tab is not allowed to do — real file dialogs,
  * writing to a path the user chose, and driving a bundled ffmpeg so exports can
- * be H.264/HEVC/ProRes with muxed audio instead of just WebM.
+ * be H.264/HEVC/ProRes/DV with muxed audio instead of just WebM.
  *
- * It also implements the headless batch mode: `filmbox --input a.mp4 --output
- * b.mp4 --preset super8-1974` renders without ever showing a window, which is what
+ * It also implements the headless batch mode: `camai --input a.mp4 --output
+ * b.mp4 --preset palmcorder-2002` renders without ever showing a window, which is what
  * makes the app usable from a script.
  */
 
@@ -19,7 +19,7 @@ const { spawn } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const { pathToFileURL } = require('node:url');
 
-const DEV_SERVER = process.env.FILMBOX_DEV_SERVER || '';
+const DEV_SERVER = process.env.CAMAI_DEV_SERVER || '';
 const INDEX_HTML = path.join(__dirname, '..', 'dist', 'index.html');
 
 /* ------------------------------------------------------------------ *
@@ -28,9 +28,9 @@ const INDEX_HTML = path.join(__dirname, '..', 'dist', 'index.html');
 
 function ffmpegPath() {
   // Explicit override wins, then the bundled static build, then whatever is on
-  // PATH. A missing ffmpeg is not fatal — it only removes the mp4/mov/gif
+  // PATH. A missing ffmpeg is not fatal — it only removes the mp4/mov/dv/gif
   // export targets, and WebM still works.
-  if (process.env.FILMBOX_FFMPEG) return process.env.FILMBOX_FFMPEG;
+  if (process.env.CAMAI_FFMPEG) return process.env.CAMAI_FFMPEG;
   try {
     let p = require('ffmpeg-static');
     if (typeof p === 'string' && p) {
@@ -66,11 +66,22 @@ function probeFfmpeg() {
 const sessions = new Map();
 
 function buildArgs(opts) {
-  const { format, fps, quality, outputPath, audioPath, width, height } = opts;
-  const args = ['-y', '-f', 'image2pipe', '-framerate', String(fps), '-i', 'pipe:0'];
+  const { format, fps, rate, quality, outputPath, audioPath, width, height } = opts;
+  const args = ['-y', '-f', 'image2pipe', '-framerate', rate || String(fps), '-i', 'pipe:0'];
   if (audioPath) args.push('-i', audioPath);
 
   switch (format) {
+    case 'dv':
+      // A real DV stream: FFmpeg's own dvvideo encoder, interlaced, bottom
+      // field first, in the system's chroma subsampling, with PCM audio.
+      args.push(
+        '-vf', `setfield=bff,format=${opts.dvSystem === 'pal' ? 'yuv420p' : 'yuv411p'}`,
+        '-c:v', 'dvvideo', '-flags', '+ilme+ildct', '-top', '0',
+        '-aspect', opts.dvAspect || '4:3',
+      );
+      if (audioPath) args.push('-c:a', 'pcm_s16le', '-ar', '48000', '-ac', '2');
+      args.push('-f', 'dv');
+      break;
     case 'prores':
       args.push('-c:v', 'prores_ks', '-profile:v', String(quality ?? 3), '-pix_fmt', 'yuv422p10le');
       if (audioPath) args.push('-c:a', 'pcm_s16le');
@@ -102,7 +113,7 @@ async function encodeStart(_event, opts) {
   const id = randomUUID();
   let audioPath = null;
   if (opts.audio && opts.audio.byteLength) {
-    audioPath = path.join(os.tmpdir(), `filmbox-${id}.wav`);
+    audioPath = path.join(os.tmpdir(), `camai-${id}.wav`);
     fs.writeFileSync(audioPath, Buffer.from(opts.audio));
   }
   const args = buildArgs({ ...opts, audioPath });
@@ -192,7 +203,7 @@ function parseCli(argv) {
       case 'help': job.help = true; break;
       default:
         // Anything with a dot is treated as a parameter override, which means
-        // every one of the ~150 effect parameters is addressable from a script
+        // every one of the ~180 parameters is addressable from a script
         // without this file having to know their names.
         if (key.includes('.')) job.params[key] = coerceCli(value);
         break;
@@ -202,7 +213,7 @@ function parseCli(argv) {
 }
 
 /**
- * A media path given as a bare argument, e.g. from "Open with FILMBOX" or from
+ * A media path given as a bare argument, e.g. from "Open with CAMAI" or from
  * dropping a file onto the exe. Distinct from the render CLI, which needs both
  * --input and --output.
  */
@@ -229,34 +240,37 @@ function coerceCli(v) {
 }
 
 const HELP = `
-FILMBOX — film stock and format emulation for video and audio
+CAMAI — camcorder emulation for video and audio
 
-  filmbox                                     open the application
-  filmbox --input IN --output OUT [options]    render without a window
+  camai                                       open the application
+  camai --input IN --output OUT [options]      render without a window
 
 Options
   --input PATH          source video or image
   --output PATH         destination file
   --preset NAME         built-in preset id (see docs/PRESETS.md)
   --settings PATH       preset JSON exported from the app
-  --format FMT          h264 | hevc | prores | gif | pngseq      (default h264)
-  --fps N               output frame rate: 23.976 | 24 | 25 | 29.97 | 30 | 50 | 59.94
-                        (default: the film's own rate)
+  --format FMT          h264 | hevc | prores | dv | gif | pngseq | wav
+                        (default h264). dv writes a real DV stream:
+                        720x480 or 720x576, bottom field first, PCM audio,
+                        encoded by FFmpeg's dvvideo encoder.
+  --fps N               output rate: the DV frame rate (29.97 or 25), or
+                        the field rate (59.94 or 50) for bob deinterlacing
   --quality N           CRF for h264/hevc, profile for ProRes    (default 18)
   --scale N             render scale, 0.25 .. 2.0                (default 1)
-  --resolution R        output height: source | 480p | 576p | 720p | 1080p
-                        | 1440p | 2160p | custom                 (default source)
+  --resolution R        output height: native | source | 480p | 576p | 720p
+                        | 1080p | 1440p | 2160p | custom         (default 1080p)
   --height N            output height, with --resolution custom
-  --start S --end S     clip range in seconds
+  --start S --end S     clip range in seconds of the source
   --seed N              noise and event seed
-  --<group>.<param> V   override any parameter, e.g. --format.stock ektachrome160
+  --<group>.<param> V   override any parameter, e.g. --format.sensor ccd3
 
 Parameter names are exactly the keys used in exported preset JSON.
 
-The rendered frame is always the shape of the projected picture, so
---framing.aspect decides the output aspect ratio and --resolution its size.
-There are never black bars baked into the file. The frame rate is a parameter
-too (--framing.fps), because it decides the cadence: --fps is a shorthand.
+Everything is rendered in the DV raster and scaled at the end, and the
+rendered frame is always the shape of the picture at the raster's pixel
+aspect: 4:3, or 16:9 in the camera's 16:9 mode. There are never black bars
+baked into the file.
 `;
 
 /* ------------------------------------------------------------------ *
@@ -278,7 +292,7 @@ function createWindow(initialFile) {
     minWidth: 1020,
     minHeight: 660,
     backgroundColor: '#0a0b0c',
-    title: 'FILMBOX',
+    title: 'CAMAI',
     icon: path.join(__dirname, '..', 'build', 'icon.png'),
     // Nothing is painted until the renderer has something to show, so the
     // window appears complete rather than as a white rectangle that then
@@ -322,7 +336,7 @@ function focusMainWindow() {
 }
 
 function log(message) {
-  process.stderr.write(`filmbox: ${message}\n`);
+  process.stderr.write(`camai: ${message}\n`);
 }
 
 async function runHeadless(job) {
@@ -344,7 +358,7 @@ async function runHeadless(job) {
       sandbox: false,
       offscreen: false,
       backgroundThrottling: false,
-      additionalArguments: ['--filmbox-batch'],
+      additionalArguments: ['--camai-batch'],
     },
   });
 
@@ -353,7 +367,7 @@ async function runHeadless(job) {
   // Every level, not just warnings: in a batch render the renderer's log is the
   // only visibility there is.
   win.webContents.on('console-message', (_e, _level, message) => {
-    process.stderr.write(`filmbox: ${message}\n`);
+    process.stderr.write(`camai: ${message}\n`);
   });
 
   const ready = new Promise((resolve) => ipcMain.once('job:ready', resolve));
@@ -506,11 +520,11 @@ if (cliJob && cliJob.help) {
           process.stdout.write(`${result.outputPath}\n`);
           app.exit(0);
         } else {
-          process.stderr.write(`filmbox: ${(result && result.error) || 'render failed'}\n`);
+          process.stderr.write(`camai: ${(result && result.error) || 'render failed'}\n`);
           app.exit(1);
         }
       } catch (err) {
-        process.stderr.write(`filmbox: ${err.message}\n`);
+        process.stderr.write(`camai: ${err.message}\n`);
         app.exit(1);
       }
       return;

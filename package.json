@@ -1,19 +1,19 @@
 {
-  "name": "filmbox",
-  "productName": "FILMBOX",
+  "name": "camai",
+  "productName": "CAMAI",
   "version": "1.0.0",
-  "description": "Film stock and format emulation for picture and sound: Super 8 to 65 mm, characteristic curves, grain fixed to the film, halation, printing, dye fading, gate weave, dirt, splices, pulldown, magnetic and optical soundtracks and the projector in the room.",
+  "description": "Camcorder emulation for picture and sound: MiniDV and Digital8, the operator, a small cheap lens, an interlaced CCD that smears, the automatic camera, the DV codec with its fixed bit budget, dropouts and recording breaks, the camera display and its paths, capture, deinterlacing and the 2006 upload — and the camera’s own sound.",
   "license": "MIT",
   "private": true,
   "type": "module",
   "main": "electron/main.cjs",
-  "homepage": "https://github.com/kingdrainman-debug/Filmbox",
+  "homepage": "https://github.com/kingdrainman-debug/Camai",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview",
-    "electron:dev": "FILMBOX_DEV_SERVER=http://localhost:5173 electron .",
+    "electron:dev": "CAMAI_DEV_SERVER=http://localhost:5173 electron .",
     "electron:start": "npm run build && electron .",
     "dist": "npm run build && electron-builder",
     "dist:all": "npm run build && electron-builder -mwl",
@@ -49,11 +49,11 @@
     "ffmpeg-static": "^5.2.0"
   },
   "build": {
-    "appId": "app.filmbox.desktop",
-    "productName": "FILMBOX",
-    "copyright": "Copyright © 2026 FILMBOX contributors",
+    "appId": "app.camai.desktop",
+    "productName": "CAMAI",
+    "copyright": "Copyright © 2026 CAMAI contributors",
     "extraMetadata": {
-      "description": "FILMBOX film emulator"
+      "description": "CAMAI camcorder emulator"
     },
     "directories": {
       "output": "release",
@@ -95,8 +95,8 @@
       "createStartMenuShortcut": true,
       "runAfterFinish": true,
       "deleteAppDataOnUninstall": false,
-      "shortcutName": "FILMBOX",
-      "uninstallDisplayName": "FILMBOX"
+      "shortcutName": "CAMAI",
+      "uninstallDisplayName": "CAMAI"
     },
     "portable": {
       "artifactName": "${productName}-${version}-Portable.${ext}",
@@ -117,11 +117,11 @@
         "AppImage",
         "deb"
       ],
-      "synopsis": "Film stock and format emulation for picture and sound",
-      "description": "Film stock and format emulation for picture and sound: Super 8 to 65 mm, characteristic curves, grain fixed to the film, halation, printing, dye fading, gate weave, dirt, splices, pulldown, magnetic and optical soundtracks and the projector in the room."
+      "synopsis": "Camcorder emulation for picture and sound",
+      "description": "Camcorder emulation for picture and sound: MiniDV and Digital8, the operator, a small cheap lens, an interlaced CCD that smears, the automatic camera, the DV codec with its fixed bit budget, dropouts and recording breaks, the camera display and its paths, capture, deinterlacing and the 2006 upload — and the camera’s own sound."
     }
   },
   "author": {
-    "name": "FILMBOX contributors"
+    "name": "CAMAI contributors"
   }
 }
