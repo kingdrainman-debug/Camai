@@ -18,10 +18,13 @@
  * loads over file://, and it costs nothing until it is called.
  */
 
-import { DEFAULTS, ParamValue, Settings, applyEngineMasters, sanitize, settingsProblems } from '../core/params';
+import { DEFAULTS, ParamValue, Settings, applyEngineMasters, num, sanitize, settingsProblems } from '../core/params';
+import { Timeline, evaluateTimeline, sanitizeTimeline } from '../core/timeline';
+import { renderProcessedAudio } from '../export/offlineAudio';
+import { zoomVelocityAt } from '../audio/engine';
 import { PRESETS } from '../core/presets';
 import { frameAspect, frameState, neededTaps, rates } from '../cam/clock';
-import { BackendChoice, createRenderer } from '../video/backend';
+import { BackendChoice, Renderer, createRenderer } from '../video/backend';
 
 export type ProbeSource =
   | { kind: 'grey'; level: number }
@@ -59,6 +62,8 @@ export interface ProbeRequest {
   qno?: boolean;
   /** Zoom bar shown, as if the rocker were pressed. */
   zoomMoving?: boolean;
+  /** Keyframes, evaluated at each frame's source time as the app does. */
+  timeline?: Timeline;
 }
 
 export interface ProbeFrame {
@@ -66,11 +71,13 @@ export interface ProbeFrame {
   dvFrame: number;
   /** Source time each field showed, in temporal order, with its parity. */
   fields: { srcT: number; parity: number }[];
-  rgb?: number[];
+  rgb?: Uint8Array;
   mean: [number, number, number];
   qno?: number[];
   exposure: { shutter: number; fNumber: number; gainDb: number; X: number; wb: number[] };
   lost: number;
+  /** Indices of the lost macroblocks, when there are any. */
+  lostMBs?: number[];
   clock: { wallMs: number; timecode: number; battery: number; shot: number };
 }
 
@@ -358,22 +365,45 @@ function drawRedText(g: CanvasRenderingContext2D, w: number, h: number): void {
   }
 }
 
+/**
+ * One renderer per backend, kept between calls: compiling every shader again
+ * for each measurement costs far more than the measurement does, especially
+ * on a software rasteriser. Its history is reset for every request, so no
+ * call sees another's frames.
+ */
+const cached: Partial<Record<BackendChoice, { canvas: HTMLCanvasElement; renderer: Renderer; kind: string }>> = {};
+
+function rendererFor(backend: BackendChoice, width: number, height: number) {
+  let c = cached[backend];
+  if (!c) {
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const made = createRenderer(canvas, backend);
+    c = { canvas, renderer: made.renderer, kind: made.kind };
+    cached[backend] = c;
+  }
+  c.canvas.width = width;
+  c.canvas.height = height;
+  c.renderer.resetHistory();
+  return c;
+}
+
 export async function renderProbe(req: ProbeRequest): Promise<ProbeResult> {
   const t0 = performance.now();
   const problems = settingsProblems(req.settings);
-  const canvas = document.createElement('canvas');
-  canvas.width = req.width;
-  canvas.height = req.height;
-  const { renderer, kind } = createRenderer(canvas, req.backend);
+  const { canvas, renderer, kind } = rendererFor(req.backend, req.width, req.height);
   const srcW = req.srcWidth ?? 720;
   const srcH = req.srcHeight ?? 540;
   const srcCanvas = document.createElement('canvas');
   srcCanvas.width = srcW;
   srcCanvas.height = srcH;
   const sctx = srcCanvas.getContext('2d', { willReadFrequently: true })!;
-  const settings = applyEngineMasters(sanitize(req.settings, DEFAULTS));
+  const baseSettings = sanitize(req.settings, DEFAULTS);
+  const timeline = sanitizeTimeline(req.timeline ?? {});
+  const settingsAt = (t: number) => applyEngineMasters(evaluateTimeline(baseSettings, timeline, t));
   const seed = req.seed ?? 1337;
-  const r = rates(settings);
+  const r = rates(applyEngineMasters(baseSettings));
 
   const read = document.createElement('canvas');
   read.width = req.width;
@@ -384,6 +414,7 @@ export async function renderProbe(req: ProbeRequest): Promise<ProbeResult> {
   try {
     for (const k of req.frames) {
       const time = k / r.output;
+      const settings = settingsAt(time);
       const fs = frameState({ settings, time, outFrame: k, seed });
       for (const tap of neededTaps(fs)) {
         if (renderer.hasFrame(tap.tag)) continue;
@@ -391,7 +422,8 @@ export async function renderProbe(req: ProbeRequest): Promise<ProbeResult> {
         if (req.source.kind === 'redtext') drawRedText(sctx, srcW, srcH);
         renderer.setSource(srcCanvas, srcW, srcH, tap.tag);
       }
-      const tel = renderer.render({ settings, time, outFrame: k, frame: k, dt: 1 / r.output, audioLevel: 0, splitX: -1, seed, zoomMoving: req.zoomMoving });
+      const moving = req.zoomMoving ?? Math.abs(zoomVelocityAt((t) => num(settingsAt(t), 'lens.zoom'), time)) > 0.01;
+      const tel = renderer.render({ settings, time, outFrame: k, frame: k, dt: 1 / r.output, audioLevel: 0, splitX: -1, seed, zoomMoving: moving });
       const plan = renderer.plan!;
       const e = plan.fields[0].exposure;
       const base: ProbeFrame = {
@@ -401,6 +433,7 @@ export async function renderProbe(req: ProbeRequest): Promise<ProbeResult> {
         mean: [0, 0, 0],
         exposure: { shutter: e.shutter, fNumber: e.fNumber, gainDb: e.gainDb, X: e.X, wb: [...e.wb] },
         lost: fs.lost ? fs.lost.reduce((a, b) => a + b, 0) : 0,
+        lostMBs: fs.lost ? Array.from(fs.lost).flatMap((v, i) => (v ? [i] : [])) : undefined,
         clock: { wallMs: fs.clock.wallMs, timecode: fs.clock.timecode, battery: fs.clock.battery, shot: fs.clock.shot },
       };
       if (req.qno) {
@@ -417,7 +450,7 @@ export async function renderProbe(req: ProbeRequest): Promise<ProbeResult> {
       let sg = 0;
       let sb = 0;
       const n = req.width * req.height;
-      const rgb: number[] | undefined = req.pixels ? new Array(n * 3) : undefined;
+      const rgb: Uint8Array | undefined = req.pixels ? new Uint8Array(n * 3) : undefined;
       for (let i = 0; i < n; i++) {
         sr += data[i * 4];
         sg += data[i * 4 + 1];
@@ -437,9 +470,66 @@ export async function renderProbe(req: ProbeRequest): Promise<ProbeResult> {
       rctx.getImageData(0, 0, 1, 1);
     }
   } finally {
-    renderer.dispose();
+    renderer.resetHistory();
   }
   return { backend: kind, frames, width: req.width, height: req.height, ms: performance.now() - t0, problems };
+}
+
+export interface AudioProbeRequest {
+  settings: Record<string, ParamValue>;
+  timeline?: Timeline;
+  /** Seconds of source to render. */
+  seconds: number;
+  seed?: number;
+  /**
+   * The programme at the microphone: silence (the camera hears only itself),
+   * white noise, or a loud second of tone followed by silence.
+   */
+  programme?: 'silence' | 'noise' | 'burst';
+  /** Return every n-th sample only, to keep the transfer small. */
+  decimate?: number;
+}
+
+/** Render the camera's sound offline, as an export does, and hand back the samples. */
+export async function renderAudioProbe(req: AudioProbeRequest): Promise<{ sampleRate: number; left: number[]; right: number[] }> {
+  const settings = sanitize(req.settings, DEFAULTS);
+  const sr = 48000;
+  let file: Blob | null = null;
+  if (req.programme && req.programme !== 'silence') {
+    const n = Math.ceil(req.seconds * sr);
+    const data = new Float32Array(n);
+    let x = 0x2545f491;
+    for (let i = 0; i < n; i++) {
+      x ^= x << 13;
+      x ^= x >>> 17;
+      x ^= x << 5;
+      const noise = ((x >>> 0) / 4294967296) * 2 - 1;
+      if (req.programme === 'noise') data[i] = noise * 0.25;
+      else data[i] = i < sr ? 0.6 * Math.sin((2 * Math.PI * 440 * i) / sr) : 0;
+    }
+    const { encodeWav } = await import('../export/wav');
+    const ctx = new OfflineAudioContext(2, n, sr);
+    const buf = ctx.createBuffer(2, n, sr);
+    buf.copyToChannel(data, 0);
+    buf.copyToChannel(data, 1);
+    file = encodeWav(buf, 16);
+  }
+  const out = await renderProcessedAudio(file, applyEngineMasters(settings), {
+    seed: req.seed ?? 1337,
+    start: 0,
+    end: req.seconds,
+    duration: req.seconds,
+    timeline: sanitizeTimeline(req.timeline ?? {}),
+    sampleRate: sr,
+  });
+  if (!out) throw new Error('no audio rendered');
+  const d = Math.max(1, req.decimate ?? 1);
+  const pick = (c: Float32Array) => {
+    const o: number[] = [];
+    for (let i = 0; i < c.length; i += d) o.push(c[i]);
+    return o;
+  };
+  return { sampleRate: sr / d, left: pick(out.getChannelData(0)), right: pick(out.getChannelData(1)) };
 }
 
 /** Draw a probe source into a canvas, for the codec comparison against FFmpeg. */
@@ -453,10 +543,25 @@ export function probeSourceImage(source: ProbeSource, w: number, h: number, t = 
   return c.toDataURL('image/png');
 }
 
+/** Base64 of a byte array, for handing pixels across a page boundary compactly. */
+export function toBase64(bytes: Uint8Array): string {
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+
+/** renderProbe, with each frame's pixels as base64 rather than an array. */
+export async function renderProbeB64(req: ProbeRequest) {
+  const r = await renderProbe(req);
+  return { ...r, frames: r.frames.map((f) => ({ ...f, rgb: f.rgb ? toBase64(f.rgb) : undefined })) };
+}
+
 declare global {
   interface Window {
     __camai?: {
       renderProbe: typeof renderProbe;
+      renderProbeB64: typeof renderProbeB64;
+      renderAudio: typeof renderAudioProbe;
       probeSourceImage: typeof probeSourceImage;
       defaults: Settings;
       presets: Record<string, Settings>;
@@ -469,6 +574,8 @@ declare global {
 export function installProbe(): void {
   window.__camai = {
     renderProbe,
+    renderProbeB64,
+    renderAudio: renderAudioProbe,
     probeSourceImage,
     defaults: DEFAULTS,
     presets: Object.fromEntries(PRESETS.map((p) => [p.id, p.settings])),

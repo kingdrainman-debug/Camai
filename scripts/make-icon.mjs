@@ -40,13 +40,21 @@ function roundedRect(x, y, halfW, halfH, r) {
 }
 
 /**
- * A strip of film seen on a light box: a dark rounded tile, a strip of warm
- * base running down it with perforations either side, and one frame lit —
- * a Kodachrome sky with a low sun, its highlight ringed red by halation.
+ * A palmcorder in profile on a dark tile: a rounded body with a hand strap
+ * over it, a lens barrel out front ending in blue-coated glass, the flip-out
+ * screen folded against its side, and the red REC lamp lit — the one detail
+ * that still reads at 16 pixels.
  */
 function drawIcon(size) {
   const px = new Uint8Array(size * size * 4);
   const ss = size <= 64 ? 4 : 2;
+
+  const mixIn = (c, col, a) => {
+    c[0] = c[0] * (1 - a) + col[0] * a;
+    c[1] = c[1] * (1 - a) + col[1] * a;
+    c[2] = c[2] * (1 - a) + col[2] * a;
+  };
+  const fill = (d) => 1 - smoothstep(-0.012, 0.012, d);
 
   for (let iy = 0; iy < size; iy++) {
     for (let ix = 0; ix < size; ix++) {
@@ -61,73 +69,60 @@ function drawIcon(size) {
           const v = ((iy + (sy + 0.5) / ss) / size) * 2 - 1;
 
           // --- tile ---
-          const bodyD = roundedRect(u, v, 0.94, 0.94, 0.30);
-          const bodyA = 1 - smoothstep(-0.012, 0.012, bodyD);
-          let cr = 0.07;
-          let cg = 0.065;
-          let cb = 0.06;
+          const bodyA = fill(roundedRect(u, v, 0.94, 0.94, 0.3));
+          const c = [0.07, 0.072, 0.08];
 
-          // --- the strip: amber base, running the full height ---
-          const stripD = Math.abs(u) - 0.66;
-          const stripA = 1 - smoothstep(-0.01, 0.01, stripD);
-          if (stripA > 0) {
-            const br = 0.23;
-            const bg = 0.13;
-            const bb = 0.05;
-            cr = cr * (1 - stripA) + br * stripA;
-            cg = cg * (1 - stripA) + bg * stripA;
-            cb = cb * (1 - stripA) + bb * stripA;
+          // --- hand strap over the top ---
+          const strap = fill(roundedRect(u + 0.2, v + 0.43, 0.42, 0.045, 0.04));
+          mixIn(c, [0.15, 0.15, 0.16], strap);
 
-            // Perforations: light through clear base, both edges.
-            const pitch = 0.36;
-            const py = ((v + 1.2) % pitch) - pitch / 2;
-            const holeD = Math.min(
-              roundedRect(u + 0.53, py, 0.065, 0.085, 0.03),
-              roundedRect(u - 0.53, py, 0.065, 0.085, 0.03),
-            );
-            const holeA = 1 - smoothstep(-0.01, 0.01, holeD);
-            cr = cr * (1 - holeA) + 0.96 * holeA;
-            cg = cg * (1 - holeA) + 0.92 * holeA;
-            cb = cb * (1 - holeA) + 0.84 * holeA;
-
-            // The frame: a sky running to a low sun over dark ground.
-            const frameD = roundedRect(u, v, 0.4, 0.31, 0.05);
-            const frameA = 1 - smoothstep(-0.01, 0.01, frameD);
-            if (frameA > 0) {
-              const t = clamp01((v + 0.31) / 0.62);
-              let fr = 0.2 + 0.55 * t;
-              let fg = 0.36 + 0.4 * t;
-              let fb = 0.66 + 0.18 * t;
-              // Ground.
-              const ground = smoothstep(0.1, 0.13, v + 0.04 * Math.sin(u * 7));
-              fr = fr * (1 - ground) + 0.16 * ground;
-              fg = fg * (1 - ground) + 0.22 * ground;
-              fb = fb * (1 - ground) + 0.08 * ground;
-              // Sun, and its red halo.
-              const sd = Math.hypot(u - 0.17, v + 0.05);
-              const sun = 1 - smoothstep(0.07, 0.09, sd);
-              const halo = Math.exp(-Math.pow((sd - 0.09) / 0.07, 2)) * (1 - sun);
-              fr = fr * (1 - sun) + 1.0 * sun + halo * 0.55;
-              fg = fg * (1 - sun) + 0.97 * sun + halo * 0.18;
-              fb = fb * (1 - sun) + 0.86 * sun + halo * 0.02;
-              cr = cr * (1 - frameA) + fr * frameA;
-              cg = cg * (1 - frameA) + fg * frameA;
-              cb = cb * (1 - frameA) + fb * frameA;
-            }
-
-            // The neighbouring frames, dimmer, above and below the frame line.
-            for (const off of [-0.7, 0.7]) {
-              const nD = roundedRect(u, v - off, 0.4, 0.31, 0.05);
-              const nA = (1 - smoothstep(-0.01, 0.01, nD)) * 0.55;
-              cr = cr * (1 - nA) + 0.45 * nA;
-              cg = cg * (1 - nA) + 0.42 * nA;
-              cb = cb * (1 - nA) + 0.45 * nA;
-            }
+          // --- body ---
+          const bd = roundedRect(u + 0.16, v - 0.06, 0.58, 0.34, 0.15);
+          const bA = fill(bd);
+          if (bA > 0) {
+            const shade = 0.17 + 0.09 * clamp01((-v + 0.3) / 0.7);
+            mixIn(c, [shade, shade * 1.02, shade * 1.1], bA);
+            // A seam along the body.
+            const seam = (1 - smoothstep(0.006, 0.014, Math.abs(v - 0.2))) * bA * 0.6;
+            mixIn(c, [0.09, 0.09, 0.1], seam);
           }
 
-          r += cr * bodyA;
-          g += cg * bodyA;
-          b += cb * bodyA;
+          // --- the screen folded against the side ---
+          const scr = fill(roundedRect(u + 0.3, v - 0.02, 0.24, 0.17, 0.04));
+          mixIn(c, [0.11, 0.115, 0.13], scr);
+          const glassScr = fill(roundedRect(u + 0.3, v - 0.02, 0.2, 0.13, 0.03));
+          mixIn(c, [0.05, 0.08, 0.1], glassScr * 0.9);
+
+          // --- lens barrel and its glass ---
+          const barrel = fill(roundedRect(u - 0.6, v - 0.05, 0.22, 0.24, 0.07));
+          mixIn(c, [0.09, 0.09, 0.1], barrel);
+          for (const ring of [0.48, 0.58, 0.68]) {
+            const rA = (1 - smoothstep(0.006, 0.016, Math.abs(u - ring))) * barrel * 0.8;
+            mixIn(c, [0.17, 0.17, 0.19], rA);
+          }
+          const ge = Math.hypot((u - 0.83) / 0.06, (v - 0.05) / 0.22) - 1;
+          const gA = 1 - smoothstep(-0.05, 0.05, ge);
+          if (gA > 0) {
+            const t = clamp01((v + 0.17) / 0.44);
+            mixIn(c, [0.12 + 0.2 * (1 - t), 0.22 + 0.25 * (1 - t), 0.42 + 0.3 * (1 - t)], gA);
+            const glint = Math.exp(-(((u - 0.82) / 0.02) ** 2) - (((v + 0.06) / 0.05) ** 2));
+            mixIn(c, [0.9, 0.95, 1], glint * gA);
+          }
+
+          // --- the REC lamp, lit ---
+          const dd = Math.hypot(u + 0.56, v + 0.13);
+          const lamp = 1 - smoothstep(0.075, 0.09, dd);
+          const glow = Math.exp(-Math.pow((dd - 0.06) / 0.07, 2)) * (1 - lamp) * 0.35;
+          mixIn(c, [0.93, 0.12, 0.1], lamp);
+          c[0] += glow * 0.8;
+          c[1] += glow * 0.08;
+          c[2] += glow * 0.06;
+          const hot = Math.exp(-(((u + 0.58) / 0.025) ** 2) - (((v + 0.15) / 0.025) ** 2)) * lamp;
+          mixIn(c, [1, 0.75, 0.7], hot * 0.8);
+
+          r += c[0] * bodyA;
+          g += c[1] * bodyA;
+          b += c[2] * bodyA;
           a += bodyA;
         }
       }

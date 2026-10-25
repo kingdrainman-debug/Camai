@@ -14,7 +14,7 @@ import {
   idx,
   linearToSrgb,
   rgbToYcc,
-  srgbToLinear,
+  srgbToLinearFast,
 } from './core';
 
 const tmp = new Float32Array(4);
@@ -39,9 +39,9 @@ export function scenePass(srcs: Buf[], plan: FramePlan, fp: FieldPlan, E: Buf): 
   const vtmp = new Float32Array(4);
 
   const decode = (r: number, g: number, b: number, o: Float32Array) => {
-    const lr = srgbToLinear(r);
-    const lg = srgbToLinear(g);
-    const lb = srgbToLinear(b);
+    const lr = srgbToLinearFast(r);
+    const lg = srgbToLinearFast(g);
+    const lb = srgbToLinearFast(b);
     const m = Math.max(lr, lg, lb);
     const t = clamp((m - 0.95) / 0.05, 0, 1);
     const k = Math.pow(2, hr * t * t * (3 - 2 * t));

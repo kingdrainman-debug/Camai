@@ -1,28 +1,35 @@
-# FILMBOX
+# CAMAI
 
-**Film stock and format emulation for picture *and* sound.**
+**Camcorder emulation for picture *and* sound.**
 
-A real-time film emulator for video and stills that runs in a browser and ships
-as a standalone desktop application and a headless command line. Load a clip and
-get a piece of film: Super 8 to 65 mm, reversal or negative, exposed through a
-soft zoom, developed on a characteristic curve, printed, faded, scratched, run
-through a projector with a hair in the gate — and heard through a magnetic
-stripe or an optical track, with the projector clattering in the room once a
-frame.
+A real-time camcorder emulator for video and stills that runs in a browser and
+ships as a standalone desktop application and a headless command line. Load a
+clip and it becomes the world in front of a consumer camcorder of 1995–2008:
+held by someone who is not a camera operator, seen through a small cheap zoom
+by a CCD the size of a fingernail read out in interlaced fields, chased by an
+automatic camera, sharpened by its DSP, crushed into 8×8 blocks by a DV codec
+with a fixed bit budget, dropped out by a tape, captured through a cheap card,
+and uploaded to a 2006 video site — with the microphone on the camera body
+hearing the transport, the zoom motor and the REC button.
 
-| Super 8 Kodachrome, 1974 | 35 mm release print, fourth generation |
+| MiniDV palmcorder, 2002 | Christmas morning, 2002 |
 |---|---|
-| ![Super 8](docs/images/super8-1974.jpg) | ![35 mm print](docs/images/print35-4th.jpg) |
-| **16 mm news film, as broadcast** | **Home movie found in a loft** |
-| ![16 mm news](docs/images/news16-1974.jpg) | ![Loft](docs/images/loft.jpg) |
+| ![Palmcorder](docs/images/palmcorder-2002.jpg) | ![Christmas](docs/images/christmas-2002.jpg) |
+| **Skate video, 2001** | **Night mode in the woods** |
+| ![Skate](docs/images/skate-2001.jpg) | ![Night](docs/images/night-woods.jpg) |
+| **Found tape, captured in 2006** | **Found-footage imitation** |
+| ![Found tape](docs/images/found-tape-2006.jpg) | ![Imitation](docs/images/found-footage-imitation.jpg) |
 
-*Every image here is the drawn test scene from `src/testing/probe.ts` through a
+*Every image here is a drawn test scene from `src/testing/probe.ts` through a
 built-in preset, rendered by `npm run shots`.*
 
-A sibling to [CRTBOX](https://github.com/kingdrainman-debug/Analoguehorrorbox),
-which does the same for cathode-ray televisions, and from which FILMBOX was
-forked: the parameter schema, the two render backends, the enforced help, the
-keyframe timeline, the guide and the packaging all come from there.
+The third in a family:
+[CRTBOX](https://github.com/kingdrainman-debug/Analoguehorrorbox) does
+televisions and VHS, [FILMBOX](https://github.com/kingdrainman-debug/Filmbox)
+film stocks and formats. CAMAI is forked from FILMBOX, history and all: the
+parameter schema, the engine masters, the shared event clock, the two render
+backends, the probe, the enforced help, the keyframe timeline, the guide and
+the packaging come from there; the composite capture is adapted from CRTBOX.
 
 📄 **[The design brief](docs/BRIEF.md)** · **[The presets](docs/PRESETS.md)**
 
@@ -30,162 +37,139 @@ keyframe timeline, the guide and the packaging all come from there.
 
 ## The idea
 
-Grain overlays and orange LUTs are a solved, boring problem. FILMBOX models the
-**chain** instead: light hits an emulsion, the emulsion has a characteristic
-curve, the film goes through a camera with a bad gate, gets developed, printed,
-projected or telecined, and ages badly in a cupboard. Every artefact falls out of
-modelling a step in that chain, not out of a texture multiplied on top.
+A VHS overlay PNG, a blur, a REC dot and a date in a pixel font is a solved,
+boring problem. CAMAI models the chain instead, and every artefact comes from
+one step of it:
 
-That has consequences you can see:
+1. A small cheap lens throws light onto a CCD the size of a fingernail.
+2. The CCD reads out in interlaced fields and smears where it is overloaded.
+3. An automatic camera chases exposure, focus and white balance.
+4. Its DSP sharpens every edge.
+5. A codec with a fixed bit budget crushes the result into 8×8 blocks.
+6. A tape drops out.
+7. Someone captures it over FireWire, or through a cheap analogue card, and
+   uploads it to a 2006 video site.
 
-- **Highlights roll off rather than clip** — because the curve has a shoulder,
-  and a print stock has a toe. Reversal film, whose curve must span its whole
-  density range, clips two stops above grey; a printed negative rolls off over
-  four.
-- **Grain is on the film.** When the camera's claw misregisters, the image moves
-  and the grain stays put. When the projector's gate weaves, picture, grain and
-  dust move together. That difference is most of what separates film from a
-  grain filter.
-- **The format is physical.** Grain comes from the stock's RMS granularity
-  through Selwyn's law; halation from the thickness of the base; weave in
-  micrometres; lens sharpness in line pairs per millimetre. The same stock is
-  7.5× grainier on Super 8 than on 35 mm for the reason it really was — the
-  frame is enlarged more — and nothing has to be set twice.
-- **Dirt has a polarity.** Dust on a print is black. Dust that was on the
-  negative when it was printed held back the printer light, so it prints white.
-  A scratch on a print's emulsion is bright and, if shallow, coloured; the same
-  scratch on the negative prints dark.
-- **Fading is per dye.** A 1970s Eastman print goes pink because its cyan and
-  yellow dyes failed and its magenta did not — not because it desaturated.
+Some consequences that fall out of modelling rather than imitating:
+
+- **Gain noise starves the codec.** The noise is in the signal before the
+  codec, and DV gives every five macroblocks a fixed number of bits, so a
+  dark room with the gain up blocks far worse than a bright one — everywhere
+  at once, including where the noise is not, because each segment's five
+  macroblocks come from five places across the frame.
+- **Daylight footage is crisp and jittery** because the automatic exposure
+  raises the shutter to 1/1000 s rather than stop down into diffraction —
+  and a faster shutter makes the CCD's smear stronger relative to the
+  picture, which is why streetlights and the sun draw their stripes.
+- **The single-chip camera's colour** is decoded from complementary filter
+  sums and differences, one colour difference per line: low colour
+  resolution, false colour on fine detail, muddy reds, and a blown sky that
+  goes cyan or yellow at its edge before it goes white.
+- **The REC overlay was never on the tape.** Where an overlay enters the
+  chain decides what the chain does to it: burned in before the codec it
+  rings and bleeds; drawn on the AV output it sits crisply on the blocks and
+  softens with any analogue capture after it.
+- **The camera always has sound**: with a silent clip, the soundtrack is the
+  camera's own transport, locked to the frame rate.
 
 ---
 
 ## What is modelled
 
-### Three engines, in the order the light meets them
+### Three engines, in the order the picture meets them
 
-| Tab | Sections |
-|---|---|
-| **Lens** | **Exposure** — stops, the scene's light against the stock's balance, the 85 filter Super 8 cameras had on a switch, and how much highlight the source clipped · **Lens** — resolving power in lp/mm, corner falloff, vignetting in stops, lateral colour in µm, distortion, veiling flare · **Anamorphic** — squeeze (which stretches the grain), streak flare |
-| **Stock** | **Format & Stock** — gauge, emulsion, camera speed · **Characteristic Curve** — toe, gamma, shoulder, their softness, layer crossover, push/pull · **Grain** — three uncorrelated, clumped, density-dependent layers · **Halation** — red, from the base, radius from its thickness · **Dyes** — interimage and impurity · **Print & Process** — contact print through printer lights, scanned negative, or the raw orange negative; duplicate generations; bleach bypass · **Dye Fading** — years and storage against each dye's own rate |
-| **Gate** | **Camera Transport** — registration error, frame jitter, exposure flicker, spring-motor speed drift, flash frames at every camera start · **Projector** — gate weave, projection speed, a 2- or 3-blade shutter beating against the capture camera, lamp ripple, hot spot, focus and film buckle · **Gate Dirt & Hair** · **Film Dirt** · **Scratches** · **Splices & Cues** · **Light Leaks & Fog** — including the fogged head and tail of every cartridge · **Decay** — vinegar syndrome, channelling, mould, water marks, flaking · **Telecine** — 3:2 pulldown with real field combing, transfer tone · **Framing & Output** — projection aspect, overscan to the perforations, output frame rate |
+- **Camera** — the operator (tremor, sway, walking, bumps, whip pans, a
+  keyframable pan, tilt and roll, all of it magnified by the zoom); the lens
+  (zoom, softness, corners, vignetting, lateral colour, veiling flare,
+  diffraction at the f-number the camera chose, wide and fisheye adapters);
+  exposure (scene light, iris, shutter and gain steered together with lag and
+  overshoot, backlight compensation, fluorescent flicker beating with a fast
+  shutter); the sensor (complementary CCD, three CCDs or Bayer CMOS; full
+  wells per filter, blooming, column smear, read and shot noise); contrast-
+  detection autofocus that hunts; grey-world white balance that stops short of
+  tungsten and ignores green; electronic stabilisation that steadies the frame
+  but not the blur; digital zoom; the knee and the white clip with
+  superwhites; detail enhancement with coring and a limiter; the battery;
+  infrared night mode; the effects button and the fader.
+- **Tape** — interlace (two moments a frame, bottom field first, field
+  integration); 4:1:1 or 4:2:0 chroma; the DV codec (8×8 DCT with 8-8 and
+  2-4-8 modes, activity classes, DV's coefficient weighting, segment rate
+  control over shuffled macroblocks, overflow truncation, 8-bit samples);
+  tape errors (dropouts concealed on the macroblock grid, head clogs); and
+  recording breaks.
+- **Display** — the camera's viewfinder display and the date, each with its
+  own path into the chain; the capture (FireWire, S-Video, composite with a
+  notch or comb decoder); deinterlacing (weave, bob, blend, discard); the 2006
+  upload; scaling to the output with the right pixel aspect.
 
-Each tab has a **master switch** that bypasses its whole engine; each section has
-its own. They fold down into the section switches before rendering, so the two
-backends can never disagree about what "off" means.
+### Native raster, sized in the medium
 
-### Formats
+Everything up to the display is rendered in the DV raster — 720 × 480 or
+720 × 576 — and only then scaled to the output. An 8×8 block is 8×8 DV
+pixels and about 18×18 on a 1080p output; an OSD glyph is cells of two DV
+samples by two lines; smear is a sensor column.
 
-From the camera apertures in the SMPTE and Kodak references. Perforations are
-drawn where they sit relative to the frame, which is what an overscanned
-transfer shows.
+### The clocks
 
-| Gauge | Aperture | Pitch | Native fps | A load |
-|---|---|---|---|---|
-| Regular 8 | 4.5 × 3.3 mm | 3.81 mm | 16 | 25 ft run twice, 4,000 frames |
-| **Super 8** | 5.79 × 4.01 mm | 4.234 mm | 18 | 50 ft cartridge, 3,600 frames |
-| 16 mm | 10.26 × 7.49 mm | 7.62 mm | 24 | 100 ft spool, 4,000 frames |
-| Super 16 | 12.52 × 7.41 mm | 7.62 mm | 24 | 400 ft magazine |
-| 35 mm Academy | 22.0 × 16.0 mm | 19.0 mm | 24 | 1,000 ft magazine |
-| Super 35 | 24.89 × 18.66 mm | 19.0 mm | 24 | 1,000 ft magazine |
-| 65 mm 5-perf | 52.48 × 23.01 mm | 23.75 mm | 24 | 1,000 ft magazine |
+`src/cam/clock.ts` turns output time into DV frames and two fields, each with
+its own moment of the source; a slow shutter integrates several. Recording
+breaks separate three clocks: **source time** (the world), **tape time**
+(shots butted together: the counter, which runs straight across a break) and
+**wall time** (tape time plus the gaps between shots: the date, which jumps).
+`public/worklets/camai-events.js` holds every event — shots, dropouts, clogs,
+the operator's hand, focus hunts, the battery — as pure functions of time and
+seed, imported by both the renderer and the audio worklet, so they agree.
 
-### Stocks
+### Sound
 
-Camera: **Kodachrome 40**, **Ektachrome 160** (Super 8, 1970s), **Ektachrome
-100D**, **Ektachrome VNF 7240** (television news), **Tri-X reversal**, **Vision3
-50D / 250D / 500T**, **Eastman Color Negative II 5247**, **Double-X**. Print:
-**Vision 2383**, **Eastman Color Print 5381** (the one that went pink),
-**Technicolor dye transfer**, **Fine Grain Positive 2302** (black and white).
-
-Each is described by the numbers a data sheet gives — gamma per layer, where a
-grey card lands, the straight line's extent, Dmin and Dmax, RMS granularity and
-clump size, halation, MTF, dye impurity, and fade rates per dye. They are
-approximations read off published curves; the relationships between stocks are
-what they should be, which matters more than the third decimal place.
-
-### How the tone works
-
-The characteristic curve is the difference of two softplus functions — flat
-below the toe, slope γ along the straight line, flat above the shoulder — with
-controllable position and softness at each end. Its total rise is exactly
-γ·(shoulder − toe), which is the whole reason reversal has little latitude: it
-must span Dmax to Dmin, so its highlight end is (Dmax − Dmin)/γ above its shadow
-end, about six stops in all.
-
-Printer lights are not guessed. As a laboratory does, the model finds the
-density a grey card produces on the negative and solves for the printer exposure
-that prints it at the print stock's aim density; printer points then move from
-there, 0.025 log E each. The telecine maps the aim density to video grey and
-clear film to white, so video log-luminance is a straight line in print density —
-every bend in the picture's tone is a bend in the film's curve.
-
-### Sound — the other half
-
-| Section | |
-|---|---|
-| **Soundtrack** | magnetic stripe · optical variable area · optical variable density · silent film |
-| **Sound Transport** | wow, flutter, and *sprocket modulation* — the pull-down leaking through the loop at the perforation rate |
-| **Magnetic Stripe** | hiss, head wear, oxide saturation, dropouts, and **print-through**: the echo of the adjacent winding. Exports render it as a true *pre*-echo |
-| **Optical Track** | hard clipping past 100% modulation, variable density's curve distortion, image spread, crackle from dirt, perforation ticks, the **exciter lamp's hum**, and a **bloop** at every splice |
-| **Playback & Amplifier** | the **Academy curve**, a home projector's amplifier, valve or transistor overload, mains hum |
-| **Speaker & Room** | from a projector's built-in cone to a horn behind the screen; "through the booth glass" |
-| **Projector Noise** | the claw once a frame, a worn mechanism's second rattle, the shutter and fan, the motor — added in the room, not through the speaker |
-
-The track's treble ceiling is derived, not set: Super 8 at 18 fps passes the
-head at 76 mm/s and stops near 7 kHz; a projector faster than the camera plays
-the soundtrack faster and higher, in the preview and the export alike.
+One AudioWorklet in tape time: the microphone on the body (capsule EQ, room
+tone, wind, wind cut) hearing the camera (the drum's whine at about 150 Hz
+locked to the frame rate, the capstan, the zoom motor following the zoom's
+speed, the focus motor ticking while it hunts, the REC clunk, a thump for
+each bump); automatic gain control with attack, release and a ceiling; DV
+audio as 16-bit 48 kHz or 12-bit non-linear band-limited for 32 kHz; the
+tape's dropouts muting or stuttering the frames the picture conceals; breaks
+cutting dead with a click.
 
 ### A/V Link
 
-The picture and the sound go through the same machine. Both halves import one
-event clock — `public/worklets/film-events.js`, a pure function of frame number
-and seed — so they agree without exchanging a message:
-
-- **Weave → clatter.** How hard the claw struck a frame throws it in the gate
-  *and* sets the loudness of that frame's clack.
-- **Splice → pop.** A splice through the gate jumps the picture and pops the
-  soundtrack at the same frame.
-- **Dirt → crackle.** The picture's dirt adds crackle to an optical track: the
-  same dirty print.
-- **Lamp → hum.** One supply feeds lamp and exciter: ripple you see is hum you hear.
-- **Speed → pitch.** A camera running slow recorded its sound slow too.
-- **Audio → lamp.** Loud passages sag the supply and dim the picture.
+Only physical couplings: the zoom's speed is the motor's whirr; a focus hunt
+is the focus motor ticking; a recording break is a cut, a clunk and a dead
+stop; a dropout mutes the audio on the same damaged tracks; a bump is a jolt
+and a thump; the transport's whine is locked to the frame rate.
 
 ---
 
 ## Verified, not asserted
 
-`npm test` typechecks, builds, checks that every parameter, section and preset is
-documented, then runs `scripts/smoke.mjs`: the built app in a real browser,
+`npm test` typechecks, builds, checks that every parameter, section and preset
+is documented, then runs `scripts/smoke.mjs`: the built app in a real browser,
 driven through its own interface, plus a probe that renders synthetic sources
-through the real renderers and **measures the film from pixels**. From the last
-run in development:
+— drawn at the exact moment each field asks for — through the real renderers
+and **measures the camcorder from pixels and samples**. From the last run in
+development:
 
 ```
-curve     slope toe / mid / shoulder: linear 1.00 / 0.99 · Kodachrome 0.43 / 1.69 / 0.69 · Vision3 + print 0.11 / 1.02 / 0.24
-latitude  highlights flatten at +2.1 stops on Kodachrome over 0.9 stops, +3.9 on Vision3 over 3.3
-grain     camera weave: grain stays (r=1.00 at 0,0) · projector moves strip 4px: grain follows (r=0.92 at 0,4)
-grain     Vision3 250D grain power: Super 8 2.36 · 16 mm 1.09 · 35 mm 0.32 (7.5×)
-dirt      frame-to-frame overlap: gate grit 1.00 (stays put while the strip weaves) · film dust 0.02
-polarity  dust on reversal: 368 dark px · on a negative, printed: 325 white px
-halation  glow beside a white patch on black: R 67 · G 37 · B 29
-fading    5381 grey: fresh 119,118,117 → 40 warm years 215,149,174
-hold      18 distinct pictures in one second of 59.94 fps video from 18 fps film
-pulldown  fields 23232323232323 · 8/20 frames combed · progressive holds 2,1,1,1,2,1,1
-splice    splices on frames 11, 18, 24, 44, 50 · picture jumps 64.2/px · pops at 0.61, 1.00, 1.33, 2.44, 2.78 s
-purity    frame 9 identical whether rendered after 3, 4, 5 or on its own (GPU and CPU)
-cpu       0.00/px apart without grain
-audio     projector clatter every 56 ms at 18 fps
-export    60 frames of 160×120 for 2.00 s at 29.97 · soundtrack · settings embedded
+SMOKE_RESULTS
 ```
 
-The interface stages cover mounting with every shader linked, a still and a
-video reaching the film, keyframes easing between values, the output frame
-taking the asked-for shape, every one of 47 picture parameters measurably
-reaching the render, the guide and the ⓘ panels, the engine masters, the CPU
-toggle, a deterministic export through the UI, and all of it over `file://` as
-the packaged app loads it.
+The codec is also compared against **FFmpeg's own `dvvideo` encoder**, on the
+same pre-codec frame, codec error only (each against its own 4:1:1
+reference). The emulation's rate control is an approximation — the bit cost
+of DV's variable-length code is modelled, not tabulated — calibrated against
+the real encoder. In development (525/60):
+
+| source | PSNR, emulation | PSNR, FFmpeg | blocking ratio, emulation | blocking ratio, FFmpeg | HF kept, emulation | HF kept, FFmpeg |
+|---|---|---|---|---|---|---|
+| drawn scene | 54.4 dB | 55.2 dB | 1.11 | 1.20 | 0.98 | 0.98 |
+| zone plate | 37.7 dB | 38.0 dB | 1.19 | 1.30 | 1.01 | 0.99 |
+| noise patch | 44.6 dB | 47.4 dB | 0.72 | 0.73 | 0.93 | 0.93 |
+| fine texture | 32.2 dB | 31.8 dB | 0.94 | 0.77 | 0.90 | 0.76 |
+
+So: close on smooth and structured pictures; about 3 dB worse than the real
+encoder on fine noise; and on dense fine texture it keeps more of the highest
+frequencies than DV does. The smoke test fails if any of the first three drift
+more than 4 dB or 0.3 in blocking ratio from FFmpeg.
 
 ---
 
@@ -193,23 +177,32 @@ the packaged app loads it.
 
 ### Desktop
 
-Download from the releases page: a one-click installer or a portable `.exe`. The
-build is not code-signed, so SmartScreen asks the first time — **More info → Run
-anyway**.
+Download from the releases page: a one-click installer or a portable `.exe`.
+The build is not code-signed, so SmartScreen asks the first time — **More info
+→ Run anyway**.
 
 ### Command line
 
 The desktop build renders without a window:
 
 ```
-filmbox --input in.mp4 --output out.mp4 --preset super8-1974
-filmbox --input in.mp4 --output out.mov --format prores --preset print35-4th --fps 23.976
-filmbox --input in.mp4 --output out.mp4 --settings mylook.filmbox.json --format.stock ektachrome160
+camai --input in.mp4 --output out.mp4 --preset palmcorder-2002
+camai --input in.mp4 --output out.dv --format dv --preset christmas-2002
+camai --input in.mp4 --output out.mp4 --settings mylook.camai.json --format.sensor ccd3
 ```
 
 Any parameter is addressable as `--<group>.<param>`, with the same keys as the
-preset JSON. `filmbox --help` lists the options; [docs/PRESETS.md](docs/PRESETS.md)
+preset JSON. `camai --help` lists the options; [docs/PRESETS.md](docs/PRESETS.md)
 lists the presets.
+
+### DV export
+
+`--format dv` (or **DV · .dv** in the export panel) writes a real DV stream,
+720 × 480 or 720 × 576, interlaced, bottom field first, with PCM audio. The
+picture is rendered up to the codec — the camera, its interlace and anything
+burned in — and FFmpeg's `dvvideo` encoder does the DV encoding, so the codec
+in the file is the codec in the file. Tape errors and the display stages are
+playback, not recording, and are left out.
 
 ### In a browser
 
@@ -218,28 +211,26 @@ npm ci
 npm run dev
 ```
 
-The guide opens on first run (<kbd>F1</kbd> brings it back). Every parameter and
-section has an **ⓘ** explaining what it physically is, what each end of its range
-looks like and when to reach for it.
+The guide opens on first run (<kbd>F1</kbd> brings it back). Every parameter
+and section has an **ⓘ** explaining what it physically is, what each end of
+its range looks like and when to reach for it.
 
 ### Two renderers
 
-**Auto / GPU / CPU** in the header. The GPU path is WebGL2. The CPU path is plain
-JavaScript, bottom-row-first so its pixel centres are `gl_FragCoord`'s exactly,
-and matches the GPU to 0.00/px with grain off. It exists for machines without
-WebGL2, for headless renders, and for bit-identical output. It is much slower:
-`npm run bench` prints both, separately for a new film frame (exposed,
-developed, printed) and a held one (projector only — a developed frame is cached
-and reused while the film frame is held). In this container the GPU rows are
-SwiftShader, a software rasteriser, so they are a floor; real hardware is far
-faster.
+**Auto / GPU / CPU** in the header. The GPU path is WebGL2, nineteen passes.
+The CPU path is plain JavaScript mirroring every pass, top row first as every
+shader addresses its images, with the same integer hash for noise; the smoke
+test holds them to within half a level a pixel on the flagship. It exists for
+machines without WebGL2, for headless renders, and to check the GPU. It is
+slower: `npm run bench` prints both. In this container the GPU rows are
+SwiftShader, a software rasteriser, so they are a floor.
 
 ### Timeline & keyframes
 
-Every parameter can be animated: click **◷**, scrub, change the value. Numbers
-interpolate; stocks, switches and enums hold, because there is no stock half
-way between Kodachrome and Vision3. Per-keyframe easing includes a hard hold —
-ramp a light leak in over three frames and out again.
+Every parameter can be animated: click **◷**, scrub, change the value.
+Numbers interpolate; switches and choices hold. Animate the zoom and the motor
+is heard while it moves and the display shows its zoom bar; animate the scene
+light from a room into daylight and the exposure blows out and pumps down.
 
 ---
 
@@ -253,13 +244,16 @@ npm run smoke          the smoke test alone (needs a build)
 npm run help:check     every parameter, section and preset documented
 npm run docs           regenerate docs/PRESETS.md
 npm run bench          throughput, both backends
-npm run shots          render every preset over the test scene
+npm run shots          render every preset over the test scenes
 npm run dist:win       package for Windows
 ```
 
-Packaging for Windows from Linux needs Wine with 32-bit support (the NSIS
-step runs the installer it has just built), and `ffmpeg-static` holding the
-Windows binary instead of the Linux one, since the whole package is bundled:
+Do not run `shots` or `bench` alongside the smoke test: the contention fails
+its timing-sensitive stages for reasons unrelated to what they test.
+
+Packaging for Windows from Linux needs Wine with 32-bit support (the NSIS step
+runs the installer it has just built), and `ffmpeg-static` holding the Windows
+binary instead of the Linux one, since the whole package is bundled:
 
 ```
 mv node_modules/ffmpeg-static/ffmpeg /tmp/ffmpeg-linux
@@ -271,43 +265,75 @@ rm node_modules/ffmpeg-static/ffmpeg.exe*; mv /tmp/ffmpeg-linux node_modules/ffm
 Layout:
 
 ```
-src/core/params.ts       the schema: ~200 parameters, the single source of truth
-src/core/help.ts         prose for every parameter and section
-src/core/presets.ts      the presets, validated against the schema
-src/film/formats.ts      gauges
-src/film/stocks.ts       emulsions
-src/film/tone.ts         curves, printer lights, fading, the transfer
-src/film/clock.ts        output time → film frames, fields, exposure times, events
-src/film/passes.ts       numbers both renderers derive the same way
-public/worklets/film-events.js   the event clock, shared by picture and sound
-public/worklets/filmbox-dsp.js   transport, track and projector processors
-src/video/shaders/       camera, down, blur, film, present
-src/video/cpu/film.ts    the same passes in JavaScript
-src/audio/engine.ts      the Web Audio graph
-src/testing/probe.ts     the measurement hook the smoke test uses
+src/core/params.ts        the schema: 183 parameters, the single source of truth
+src/core/help.ts          prose for every parameter and section
+src/core/presets.ts       the presets, validated against the schema
+src/cam/clock.ts          output time → DV frames, fields, source moments, shots, the clocks
+src/cam/automatics.ts     automatic exposure and white balance, with memory
+src/cam/plan.ts           every number both renderers use, per field and per frame
+src/cam/dvlayout.ts       macroblocks, superblocks and the segment shuffle
+src/cam/osd.ts            the character generator: an original 5×7 font, two layers
+public/worklets/camai-events.js   the event clock, shared by picture and sound
+public/worklets/camai-dsp.js      the camera's sound
+src/video/shaders/        scene, blur, smear, sensor, demod, dsp, chroma, fdct,
+                          blockinfo, cost, qno, dequant, idct, assemble, post,
+                          updown, upfdct, upidct, present
+src/video/cpu/            the same passes in JavaScript
+src/audio/engine.ts       the Web Audio graph
+src/testing/probe.ts      the measurement hook the smoke test uses
+electron/encode.cjs       FFmpeg arguments for every export format, DV included
 ```
 
 ### Honest notes
 
-- Stock figures are approximations from published data sheets and known
-  behaviour, not measurements of film.
-- The 1.0.0 Windows installer and portable exe were built on Linux under Wine,
-  not on Windows. Under Wine the installer was checked to install silently per
-  user, create its shortcuts and uninstall entry, and uninstall cleanly; the
-  exe carries its icon and version resource, its main process runs, and the
-  bundled ffmpeg.exe has the H.264, HEVC, ProRes and AAC encoders. Chromium's
-  renderer does not start under Wine, so no render was made with the Windows
-  build; renders were checked with the Linux build under xvfb. They are
-  unsigned, so SmartScreen will warn on first run. The Windows workflow builds
-  the same targets on a real Windows runner.
-- Magnetic print-through is a true pre-echo only in exports. The live preview
-  cannot look a reel's turn into the future, so it plays the echo after.
-- In the live preview the source is sampled when each film frame begins, from
-  wherever the video element is; exports seek to each frame's exact exposure
-  time, including a drifting camera's.
-- When a pulldown frame needs two film frames in the live preview, both come
-  from the video element's current frame; exports seek for each.
+- **The codec is approximate where the table above says so.** Rate control
+  picks one quantiser per segment of five macroblocks (the real encoder can
+  vary it per macroblock) and costs bits with a fitted formula rather than
+  DV's VLC table. The 2-4-8 transform uses the ordinary zigzag scan. The
+  superblock partition follows the standard's shape — bands of 135
+  macroblocks, five columns of 27, segments drawn from rows i+2, i+6, i+8, i,
+  i+4 — but the order inside a superblock is simpler than the standard's
+  serpentine; nothing visible depends on it.
+- **Figures to verify against the standard**, used as the brief gave them or
+  from memory of FFmpeg's tables: the quantiser shift table and class
+  offsets; the class thresholds (scaled to this implementation's DCT units);
+  the 8-8 weighting; 4:2:0 chroma siting (averaged across the two fields
+  here); the 12-bit companding segments; tape speeds and tracks per frame.
+- **The sensor is a model, not a measurement.** Filter overlap, full well,
+  smear and noise are set to look right and behave right — smear rising with
+  shutter speed, noise multiplied by gain — not taken from a data sheet. The
+  complementary mosaic's decoding matrix undoes half the filters' overlap by
+  design.
+- **The source's highlights are guessed.** A clipped source cannot say how
+  bright the sun was; values in its top few percent are opened up by
+  *Highlight headroom* so a bulb can fill wells and smear while a white shirt
+  barely changes.
+- **Rolling shutter** samples the camera's own motion — pans, shake, whips —
+  row by row, exactly. Subject motion is sampled once a field, because the
+  source only has the frames it has.
+- **The automatics have memory.** A frame depends on the frames before it in
+  the shot. They step once a field in order, catch up across short gaps in the
+  preview, and settle instantly after a seek. An export always steps from its
+  first frame, so it is reproducible, but an export starting mid-clip starts
+  settled rather than with the preview's history.
+- **Concealment** substitutes the previous decoded frame. After a seek there
+  is none, so the first frame conceals with grey blocks.
+- **Composite capture** uses NTSC-style comb filtering in both systems; PAL's
+  delay-line decoder is approximated.
+- **12-bit audio** is band-limited and companded at 48 kHz rather than
+  resampled to 32 kHz and back; the DV file export writes 16-bit 48 kHz PCM,
+  which is what FFmpeg's DV muxer supports.
+- **The analogue camcorders** (Video8, Hi8, VHS-C, with the date imprinted)
+  and the MPEG-2 ones (HDV, DVD, hard disk) are a later milestone. The
+  imprint path is already here; the analogue tape passes are not.
+- **The Windows build** has not been run on Windows from this repository.
+  The release workflow builds the installer and the portable exe on a real
+  Windows runner on a `v*` tag. FILMBOX's experience stands: Chromium's
+  renderer does not start under Wine, so a Wine build can be installed and
+  uninstalled but not rendered with.
+- The presets describe objects, never brands; the font and the overlay
+  layouts are drawn for this project, not lifted from any camera.
 
 ---
 
-MIT licensed. Forked from CRTBOX, also MIT.
+MIT licensed. Forked from FILMBOX, itself forked from CRTBOX, both MIT.

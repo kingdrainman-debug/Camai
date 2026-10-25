@@ -2,41 +2,54 @@
  * Headless smoke test.
  *
  * Type-checking cannot catch a shader that fails to compile, a worklet that
- * fails to register, or a parameter that moves its slider and reaches nothing.
- * So the built bundle is loaded in Chromium and driven for real.
+ * fails to register, or a parameter that moves its slider and reaches
+ * nothing. So the built bundle is loaded in Chromium and driven for real.
  *
  * Two kinds of stage:
  *
  *   - The application, through its own interface: it mounts, footage reaches
- *     the film, keyframes animate, the frame is the shape you asked for, the
- *     guide and the ⓘ panels work, the engine masters bypass, and all of it
- *     still works over file:// the way the packaged build loads it.
+ *     the camera, keyframes animate, the frame is the shape asked for, the
+ *     guide and the ⓘ panels work, the engine masters bypass, an export comes
+ *     out complete, and all of it still works over file:// the way the
+ *     packaged build loads it.
  *
- *   - The film, measured. Film artefacts are measurable, so the physics is
- *     asserted from pixels rather than trusted: the characteristic curve has a
- *     toe and a shoulder, reversal clips sooner and harder than negative, grain
- *     is fixed to the film and scales with the format, gate dirt persists and
- *     film dirt does not, fading goes magenta, pulldown is 3:2, a splice is
- *     both a jump and a pop. These use window.__filmbox.renderProbe, which
- *     drives the real renderers with synthetic sources it controls exactly.
+ *   - The camcorder, measured. Camcorder artefacts are measurable, and this
+ *     time there is a real codec to compare against. Asserted from pixels
+ *     (and samples): the two fields of a frame are two moments, bottom
+ *     first; deinterlacers comb, twitter and halve as they should; DCT
+ *     blocks sit on the 8-pixel grid of the DV raster and scale with the
+ *     output; the bit budget is shared across the frame; the codec's loss is
+ *     within a stated distance of FFmpeg's own DV encoder; 4:1:1 and 4:2:0
+ *     bleed colour as far as they should; edges overshoot and coring holds;
+ *     a CCD smears and a CMOS leans; the curve has a knee and a wall; an
+ *     overlay's path is visible; the clocks jump where they should; a
+ *     dropout is the previous frame on the macroblock grid and a mute in the
+ *     sound; the zoom is heard only while it moves; 12-bit audio is band
+ *     limited and the AGC breathes. These use window.__camai.renderProbe,
+ *     which drives the real renderers with synthetic sources drawn at the
+ *     exact moment each field asks for.
  *
  * Every stage that waits for the picture polls for a condition rather than
- * sleeping a fixed time; a fixed sleep samples an undrawn frame under load and
- * fails for reasons unrelated to the thing under test.
+ * sleeping a fixed time; a fixed sleep samples an undrawn frame under load
+ * and fails for reasons unrelated to the thing under test.
  *
  *   node scripts/smoke.mjs
  */
 
 import { chromium } from 'playwright-core';
 import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
+import { spawn, execFileSync } from 'node:child_process';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 const root = join(here, '..', 'dist');
 const fixtures = join(here, '..', 'tests', 'fixtures');
+const require = createRequire(import.meta.url);
 
 const MIME = {
   '.webm': 'video/webm',
@@ -74,13 +87,22 @@ const base = `http://127.0.0.1:${port}/`;
 
 const failures = [];
 const report = [];
-const fail = (stage, msg) => failures.push(`${stage}: ${msg}`);
-const note = (stage, msg) => report.push(`  ${stage.padEnd(10)}${msg}`);
+// Results are printed as they happen as well as summarised at the end, so a
+// crash part way through still leaves a record of everything before it.
+const fail = (stage, msg) => {
+  failures.push(`${stage}: ${msg}`);
+  console.log(`  FAIL ${stage}: ${msg}`);
+};
+const note = (stage, msg) => {
+  report.push(`  ${stage.padEnd(11)}${msg}`);
+  console.log(`  ok   ${stage.padEnd(11)}${msg}`);
+};
+const t0 = Date.now();
 
 // Use an explicit binary when one is given or present, otherwise let
 // playwright resolve the browser it installed — runnable both in the dev
 // container and on a CI runner.
-const explicit = process.env.FILMBOX_CHROMIUM ?? '/opt/pw-browsers/chromium';
+const explicit = process.env.CAMAI_CHROMIUM ?? '/opt/pw-browsers/chromium';
 const browser = await chromium.launch({
   ...(existsSync(explicit) ? { executablePath: explicit } : {}),
   args: [
@@ -109,22 +131,29 @@ async function openPage(url = base, { guide = false } = {}) {
   if (!guide) {
     await page.addInitScript(() => {
       try {
-        localStorage.setItem('filmbox.guide.hideOnStart', '1');
+        localStorage.setItem('camai.guide.hideOnStart', '1');
       } catch {
         /* private window */
       }
     });
   }
   await page.goto(url, { waitUntil: 'load' });
-  await page.waitForFunction(() => !!window.__filmbox && !!document.querySelector('.stage canvas'), null, {
+  await page.waitForFunction(() => !!window.__camai && !!document.querySelector('.stage canvas'), null, {
     timeout: 60000,
   });
   return { page, noise };
 }
 
-/** Run a probe render in the page and return frames with RGB pixels. */
-function probe(page, req) {
-  return page.evaluate((r) => window.__filmbox.renderProbe(r), { pixels: true, seed: 1337, ...req });
+/**
+ * Run a probe render in the page and return frames with RGB pixels, as bytes.
+ * A 720×480 frame is a million values: as a JSON array of numbers a run of
+ * them exhausts Node's heap, so they cross the page boundary as base64.
+ */
+async function probe(page, req) {
+  const r = await page.evaluate((x) => window.__camai.renderProbeB64(x), { pixels: true, seed: 1337, ...req });
+  if (r.problems.length) throw new Error(`the probe asked for settings the schema would change: ${r.problems.join('; ')}`);
+  for (const f of r.frames) if (f.rgb) f.rgb = new Uint8Array(Buffer.from(f.rgb, 'base64'));
+  return r;
 }
 
 /* ------------------------------------------------------------------ *
@@ -134,80 +163,18 @@ function probe(page, req) {
 function luma(frame, w, h) {
   const out = new Float64Array(w * h);
   for (let i = 0; i < w * h; i++) {
-    out[i] = 0.2126 * frame.rgb[i * 3] + 0.7152 * frame.rgb[i * 3 + 1] + 0.0722 * frame.rgb[i * 3 + 2];
+    out[i] = 0.299 * frame.rgb[i * 3] + 0.587 * frame.rgb[i * 3 + 1] + 0.114 * frame.rgb[i * 3 + 2];
   }
   return out;
 }
 
-function channel(frame, w, h, c) {
+/** BT.601 Cr of every pixel, from the 8-bit RGB. */
+function crOf(frame, w, h) {
   const out = new Float64Array(w * h);
-  for (let i = 0; i < w * h; i++) out[i] = frame.rgb[i * 3 + c];
-  return out;
-}
-
-/** Subtract a (2r+1)² box mean: what is left is grain, dirt and fine detail. */
-function highpass(g, w, h, r = 3) {
-  const out = new Float64Array(w * h);
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      let s = 0;
-      let n = 0;
-      for (let dy = -r; dy <= r; dy++) {
-        const yy = Math.min(h - 1, Math.max(0, y + dy));
-        for (let dx = -r; dx <= r; dx++) {
-          const xx = Math.min(w - 1, Math.max(0, x + dx));
-          s += g[yy * w + xx];
-          n++;
-        }
-      }
-      out[y * w + x] = g[y * w + x] - s / n;
-    }
+  for (let i = 0; i < w * h; i++) {
+    out[i] = 0.5 * frame.rgb[i * 3] - 0.418688 * frame.rgb[i * 3 + 1] - 0.081312 * frame.rgb[i * 3 + 2];
   }
   return out;
-}
-
-/** Normalised correlation of a against b shifted by (dx, dy), over a central window. */
-function correlate(a, b, w, h, dx, dy, margin = 12) {
-  let sab = 0;
-  let saa = 0;
-  let sbb = 0;
-  for (let y = margin; y < h - margin; y++) {
-    for (let x = margin; x < w - margin; x++) {
-      const va = a[y * w + x];
-      const vb = b[(y + dy) * w + (x + dx)];
-      sab += va * vb;
-      saa += va * va;
-      sbb += vb * vb;
-    }
-  }
-  return sab / Math.sqrt(saa * sbb + 1e-12);
-}
-
-function bestShift(a, b, w, h, range) {
-  let best = { dx: 0, dy: 0, c: -2 };
-  for (let dy = -range; dy <= range; dy++) {
-    for (let dx = -range; dx <= range; dx++) {
-      const c = correlate(a, b, w, h, dx, dy, range + 4);
-      if (c > best.c) best = { dx, dy, c };
-    }
-  }
-  return best;
-}
-
-function stdOf(a, w, h, margin = 10) {
-  let s = 0;
-  let s2 = 0;
-  let n = 0;
-  for (let y = margin; y < h - margin; y++) {
-    for (let x = margin; x < w - margin; x++) {
-      const v = a[y * w + x];
-      s += v;
-      s2 += v * v;
-      n++;
-    }
-  }
-  const m = s / n;
-  return Math.sqrt(Math.max(0, s2 / n - m * m));
 }
 
 function meanAbsDiff(fa, fb) {
@@ -216,19 +183,90 @@ function meanAbsDiff(fa, fb) {
   return d / fa.rgb.length;
 }
 
-const srgbToLinear = (c) => {
-  const v = c / 255;
-  return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
-};
+/** Brightness-weighted centre of the bright part of a row. */
+function barCentre(Y, w, y, thr = 120) {
+  let s = 0;
+  let n = 0;
+  for (let x = 0; x < w; x++) {
+    const v = Y[y * w + x];
+    if (v > thr) {
+      s += x * (v - thr);
+      n += v - thr;
+    }
+  }
+  return n > 0 ? s / n : NaN;
+}
 
-/** Settings that leave only the stock: no machinery, no lens, no grain. */
-const CLEAN = {
-  'engine.gate': false,
-  'lens.enabled': false,
-  'grain.enabled': false,
-  'halation.enabled': false,
-  'framing.aspect': 'gate',
-  'framing.overscan': -0.2,
+/** Mean horizontal gradient on the 8-pixel block boundaries against inside the blocks. */
+function blockRatio(Y, w, h, x0, x1, y0 = 0, y1 = h, period = 8) {
+  let bd = 0;
+  let bn = 0;
+  let id = 0;
+  let inn = 0;
+  for (let y = y0; y < y1; y++) {
+    for (let x = Math.max(1, x0); x < x1; x++) {
+      const d = Math.abs(Y[y * w + x] - Y[y * w + x - 1]);
+      if (x % period === 0) {
+        bd += d;
+        bn++;
+      } else {
+        id += d;
+        inn++;
+      }
+    }
+  }
+  return bd / bn / Math.max(id / inn, 1e-6);
+}
+
+/** PSNR of a against b over a column range, on luma. */
+function psnr(a, b, w, h, x0 = 0, x1 = w) {
+  let mse = 0;
+  let n = 0;
+  for (let y = 0; y < h; y++) {
+    for (let x = x0; x < x1; x++) {
+      const d = a[y * w + x] - b[y * w + x];
+      mse += d * d;
+      n++;
+    }
+  }
+  return 10 * Math.log10((255 * 255) / Math.max(mse / n, 1e-9));
+}
+
+/** Energy of a vertical second difference: how much vertical detail there is. */
+function verticalDetail(Y, w, h, x0 = 0, x1 = w) {
+  let s = 0;
+  for (let y = 2; y < h - 2; y++) {
+    for (let x = x0; x < x1; x++) {
+      const v = 2 * Y[y * w + x] - Y[(y - 1) * w + x] - Y[(y + 1) * w + x];
+      s += v * v;
+    }
+  }
+  return s / ((h - 4) * (x1 - x0));
+}
+
+/** How combed a frame is: adjacent-line difference beyond what lines two apart show. */
+function combing(Y, w, h, x0 = 0, x1 = w) {
+  let adj = 0;
+  let two = 0;
+  for (let y = 2; y < h - 2; y++) {
+    for (let x = x0; x < x1; x++) {
+      adj += Math.abs(Y[y * w + x] - Y[(y + 1) * w + x]);
+      two += Math.abs(Y[y * w + x] - Y[(y + 2) * w + x]);
+    }
+  }
+  return adj / Math.max(two, 1e-6);
+}
+
+const DV = { 'framing.overscan': true, 'framing.scaler': 'nearest', 'framing.dither': 0 };
+const NATIVE = { width: 720, height: 480 };
+
+/** A camera with every section of every engine off, then the DV raster at 1:1. */
+const ALL_OFF = {
+  'engine.camera': false,
+  'interlace.enabled': false,
+  'chroma.enabled': false,
+  'codec.enabled': false,
+  'audio.enabled': false,
 };
 
 /* ================================================================== *
@@ -240,22 +278,15 @@ const main = await openPage();
   const { page } = main;
   if (await page.locator('.fatal').count()) fail('mount', await page.locator('.fatal p').innerText());
   const kind = await page.evaluate(async () => {
-    const r = await window.__filmbox.renderProbe({
-      backend: 'gpu',
-      settings: {},
-      source: { kind: 'bars' },
-      width: 64,
-      height: 44,
-      frames: [0],
-    });
+    const r = await window.__camai.renderProbe({ backend: 'gpu', settings: {}, source: { kind: 'bars' }, width: 64, height: 48, frames: [0] });
     return r.backend;
   });
   if (kind !== 'gpu') fail('mount', `the GPU backend did not start (got ${kind}) — a shader failed to compile or link`);
-  else note('mount', 'app mounted · camera, glow, film and present programs linked on WebGL2');
+  else note('mount', 'app mounted · all 19 programs linked on WebGL2');
 }
 
 /* ================================================================== *
- * 2. A still pushed through the interface comes out lit, with grain
+ * 2. A still pushed through the interface comes out lit, with noise
  * ================================================================== */
 
 /** Drop a generated still onto the window, as a user would. */
@@ -288,13 +319,13 @@ const BARS = `
  * Sample the stage canvas until the picture has settled: lit, and two
  * consecutive samples agreeing on the mean. Returns the last sample.
  */
-async function settledStats(page, { minMean = 20, tolerance = 2.5, timeout = 15000 } = {}) {
+async function settledStats(page, { minMean = 20, tolerance = 2.5, timeout = 30000 } = {}) {
   return page.evaluate(
     async ({ minMean, tolerance, timeout }) => {
       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       const p = document.createElement('canvas');
       p.width = 160;
-      p.height = 112;
+      p.height = 120;
       const g = p.getContext('2d', { willReadFrequently: true });
       const sample = () => {
         const app = document.querySelector('.stage canvas');
@@ -304,28 +335,20 @@ async function settledStats(page, { minMean = 20, tolerance = 2.5, timeout = 150
         let lit = 0;
         let min = 255;
         let max = 0;
-        let sat = 0;
-        let satN = 0;
         for (let i = 0; i < d.length; i += 4) {
           const l = (d[i] + d[i + 1] + d[i + 2]) / 3;
           sum += l;
           if (l > 24) lit++;
           min = Math.min(min, l);
           max = Math.max(max, l);
-          const mx = Math.max(d[i], d[i + 1], d[i + 2]);
-          const mn = Math.min(d[i], d[i + 1], d[i + 2]);
-          if (mx > 20) {
-            sat += (mx - mn) / mx;
-            satN++;
-          }
         }
         const n = d.length / 4;
-        return { mean: sum / n, lit: lit / n, contrast: (max - min) / 255, sat: satN ? sat / satN : 0, w: app.width, h: app.height };
+        return { mean: sum / n, lit: lit / n, contrast: (max - min) / 255, w: app.width, h: app.height };
       };
       const t0 = performance.now();
       let last = sample();
       while (performance.now() - t0 < timeout) {
-        await sleep(200);
+        await sleep(300);
         const now = sample();
         if (now.mean >= minMean && Math.abs(now.mean - last.mean) < tolerance) return now;
         last = now;
@@ -342,7 +365,7 @@ async function settledStats(page, { minMean = 20, tolerance = 2.5, timeout = 150
   const s = await settledStats(page);
   if (s.lit < 0.3) fail('picture', `only ${(s.lit * 100).toFixed(1)}% of the canvas is lit`);
   if (s.contrast < 0.5) fail('picture', `contrast is only ${s.contrast.toFixed(2)}`);
-  // The flagship is a Super 8 cartridge: there must be texture in a flat bar.
+  // The flagship is a single-chip palmcorder: a flat bar is not flat.
   const texture = await page.evaluate(() => {
     const app = document.querySelector('.stage canvas');
     const p = document.createElement('canvas');
@@ -350,29 +373,26 @@ async function settledStats(page, { minMean = 20, tolerance = 2.5, timeout = 150
     p.height = app.height;
     const g = p.getContext('2d', { willReadFrequently: true });
     g.drawImage(app, 0, 0);
-    // Inside the grey bar, well clear of its edges.
     const x0 = Math.round(app.width * 0.03);
     const x1 = Math.round(app.width * 0.11);
     const y0 = Math.round(app.height * 0.3);
     const y1 = Math.round(app.height * 0.5);
     const w = x1 - x0;
     const d = g.getImageData(x0, y0, w, y1 - y0).data;
-    // Median of neighbour differences, scaled to a standard deviation: grain
-    // everywhere counts, a speck of dirt that happens to land here does not.
     const diffs = [];
     for (let i = 0; i + 4 < d.length; i += 4) {
       if ((i / 4) % w === w - 1) continue;
       diffs.push(Math.abs(d[i + 1] - d[i + 5]));
     }
     diffs.sort((a, b) => a - b);
-    return (diffs[Math.floor(diffs.length / 2)] * 1.4826) / Math.SQRT2;
+    return { median: diffs[Math.floor(diffs.length / 2)], p90: diffs[Math.floor(diffs.length * 0.9)] };
   });
-  if (texture < 0.6) fail('picture', `a flat area of the Super 8 picture has no grain (σ ${texture.toFixed(2)})`);
-  note('picture', `${(s.lit * 100).toFixed(1)}% lit · contrast ${s.contrast.toFixed(2)} · grain σ ${texture.toFixed(1)} in a flat bar`);
+  if (texture.p90 < 1) fail('picture', 'a flat area of the palmcorder picture has no noise or texture at all');
+  note('picture', `${(s.lit * 100).toFixed(1)}% lit · contrast ${s.contrast.toFixed(2)} · flat-bar texture p90 ${texture.p90}`);
 }
 
 /* ================================================================== *
- * 3. A real video clip reaches the film
+ * 3. A real video clip reaches the camera
  * ================================================================== */
 
 {
@@ -401,23 +421,23 @@ async function settledStats(page, { minMean = 20, tolerance = 2.5, timeout = 150
       vp.width = 48;
       vp.height = 36;
       const vg = vp.getContext('2d', { willReadFrequently: true });
-      const probe = document.createElement('canvas');
-      probe.width = 96;
-      probe.height = 64;
-      const pg = probe.getContext('2d', { willReadFrequently: true });
+      const pr = document.createElement('canvas');
+      pr.width = 96;
+      pr.height = 72;
+      const pg = pr.getContext('2d', { willReadFrequently: true });
       const t1 = performance.now();
-      while (performance.now() - t1 < 15000) {
-        await sleep(200);
+      while (performance.now() - t1 < 30000) {
+        await sleep(250);
         vg.drawImage(video, 0, 0, 48, 36);
         const vd = vg.getImageData(0, 0, 48, 36).data;
         let pres = 0;
         for (let i = 0; i < vd.length; i += 4) pres = Math.max(pres, (vd[i] + vd[i + 1] + vd[i + 2]) / 3);
         out.presented = pres;
-        pg.drawImage(document.querySelector('.stage canvas'), 0, 0, 96, 64);
-        const d = pg.getImageData(0, 0, 96, 64).data;
+        pg.drawImage(document.querySelector('.stage canvas'), 0, 0, 96, 72);
+        const d = pg.getImageData(0, 0, 96, 72).data;
         let lit = 0;
         for (let i = 0; i < d.length; i += 4) if ((d[i] + d[i + 1] + d[i + 2]) / 3 > 24) lit++;
-        out.lit = lit / (96 * 64);
+        out.lit = lit / (96 * 72);
         if (out.presented > 6 && out.lit > 0.15) break;
       }
       video.pause();
@@ -429,95 +449,94 @@ async function settledStats(page, { minMean = 20, tolerance = 2.5, timeout = 150
   if (r.error) fail('video', r.error);
   else {
     if (r.presented < 6) fail('video', `the element presented no frame (max ${r.presented.toFixed(1)})`);
-    if (r.lit < 0.15) fail('video', `frames exist but the film is black (${(r.lit * 100).toFixed(1)}% lit) — the source upload is broken`);
-    note('video', `element ${r.presented.toFixed(0)} · film ${(r.lit * 100).toFixed(1)}% lit`);
+    if (r.lit < 0.15) fail('video', `frames exist but the picture is black (${(r.lit * 100).toFixed(1)}% lit) — the source upload is broken`);
+    note('video', `element ${r.presented.toFixed(0)} · picture ${(r.lit * 100).toFixed(1)}% lit`);
   }
 }
 
 /* ================================================================== *
- * 4. The DSP worklet: three processors, frame-locked clatter
+ * 4. The sound: the worklet registers, the camera hears itself, 12-bit
+ *    audio is band-limited and the automatic gain breathes
  * ================================================================== */
 
+/** Render the camera's sound offline in the page. */
+function renderAudio(page, req) {
+  return page.evaluate((r) => window.__camai.renderAudio(r), req);
+}
+
+/** RMS of a sample range. */
+function rms(d, from, to) {
+  let s = 0;
+  for (let i = from; i < to; i++) s += d[i] * d[i];
+  return Math.sqrt(s / Math.max(1, to - from));
+}
+
+/** Energy of a signal above a frequency: what a first-order difference passes, crudely, plus a 2-pole filter. */
+function bandEnergy(d, sr, lo, hi, from = 0, to = d.length) {
+  // A bank of Goertzel bins across the band.
+  let e = 0;
+  const N = Math.min(4096, to - from);
+  for (let f = lo; f <= hi; f += (hi - lo) / 12) {
+    const k = Math.round((N * f) / sr);
+    const w = (2 * Math.PI * k) / N;
+    const c = 2 * Math.cos(w);
+    let s1 = 0;
+    let s2 = 0;
+    for (let i = 0; i < N; i++) {
+      const s0 = d[from + i] + c * s1 - s2;
+      s2 = s1;
+      s1 = s0;
+    }
+    e += s1 * s1 + s2 * s2 - c * s1 * s2;
+  }
+  return e;
+}
+
 {
+  const stage = 'audio';
   const { page } = main;
-  const a = await page.evaluate(async (url) => {
-    const out = { registered: false, transportRms: 0, hissRms: 0, clackInterval: 0, clacks: 0, error: null };
-    try {
-      const sr = 48000;
-      const ctx = new OfflineAudioContext(3, sr * 2, sr);
+  try {
+    const registered = await page.evaluate(async (url) => {
+      const ctx = new OfflineAudioContext(2, 128, 48000);
       await ctx.audioWorklet.addModule(url);
-      out.registered = true;
-      const params = {
-        'film.cameraFps': 18,
-        'film.projectorFps': 18,
-        'transport.enabled': true,
-        'transport.wowDepth': 0.4,
-        'audio.enabled': true,
-        'track.code': 0,
-        'magnetic.enabled': true,
-        'magnetic.hiss': -40,
-        'magnetic.dropouts': 0,
-        'projnoise.enabled': true,
-        'projnoise.level': -12,
-        'projnoise.claw': 1,
-        'projnoise.shutter': 0,
-        'projnoise.motor': 0,
-        'projnoise.wear': 0,
-        'link.enabled': false,
-      };
-      const osc = ctx.createOscillator();
-      osc.frequency.value = 440;
-      const transport = new AudioWorkletNode(ctx, 'film-transport', { outputChannelCount: [2], processorOptions: { params, seed: 3 } });
-      const track = new AudioWorkletNode(ctx, 'film-track', { numberOfInputs: 2, outputChannelCount: [2], processorOptions: { params, seed: 3 } });
-      const projector = new AudioWorkletNode(ctx, 'film-projector', { numberOfInputs: 0, outputChannelCount: [2], processorOptions: { params, seed: 3 } });
-      const merger = ctx.createChannelMerger(3);
-      osc.connect(transport);
-      transport.connect(merger, 0, 0);
-      // The track with no programme: only its own hiss.
-      track.connect(merger, 0, 1);
-      projector.connect(merger, 0, 2);
-      merger.connect(ctx.destination);
-      osc.start();
-      const buf = await ctx.startRendering();
-      const rms = (d, from) => {
-        let s = 0;
-        for (let i = from; i < d.length; i++) s += d[i] * d[i];
-        return Math.sqrt(s / (d.length - from));
-      };
-      out.transportRms = rms(buf.getChannelData(0), sr * 0.2);
-      out.hissRms = rms(buf.getChannelData(1), 0);
-      // Clack onsets: 2 ms envelope peaks, spaced at least 30 ms.
-      const d = buf.getChannelData(2);
-      const bin = sr / 500;
-      const env = [];
-      for (let i = 0; i < d.length; i += bin) {
-        let m = 0;
-        for (let k = i; k < i + bin && k < d.length; k++) m = Math.max(m, Math.abs(d[k]));
-        env.push(m);
-      }
-      const thr = Math.max(...env) * 0.25;
-      const on = [];
-      for (let i = 1; i < env.length; i++) {
-        if (env[i] > thr && env[i - 1] <= thr && (on.length === 0 || i - on[on.length - 1] > 15)) on.push(i);
-      }
-      const gaps = on.slice(1).map((v, i) => (v - on[i]) * 2);
-      gaps.sort((x, y) => x - y);
-      out.clacks = on.length;
-      out.clackInterval = gaps.length ? gaps[Math.floor(gaps.length / 2)] : 0;
-    } catch (err) {
-      out.error = String(err);
-    }
-    return out;
-  }, `${base}worklets/filmbox-dsp.js`);
-  if (a.error) fail('audio', a.error);
-  else {
-    if (!a.registered) fail('audio', 'the worklet module did not register');
-    if (a.transportRms < 0.05) fail('audio', `the transport passed no signal (rms ${a.transportRms.toExponential(2)})`);
-    if (a.hissRms < 1e-3) fail('audio', `the magnetic stripe is silent with no programme (rms ${a.hissRms.toExponential(2)})`);
-    if (Math.abs(a.clackInterval - 1000 / 18) > 4) {
-      fail('audio', `projector clatter is not locked to 18 fps: median interval ${a.clackInterval} ms against 55.6`);
-    }
-    note('audio', `transport rms ${a.transportRms.toFixed(3)} · stripe hiss ${a.hissRms.toFixed(4)} · clatter every ${a.clackInterval} ms (${a.clacks} strikes in 2 s)`);
+      return 'ok';
+    }, `${base}worklets/camai-dsp.js`).catch((e) => String(e));
+    if (registered !== 'ok') fail(stage, `the worklet did not register: ${registered}`);
+
+    // A silent source: the camera still has sound — its own transport.
+    const quiet = await renderAudio(page, {
+      settings: { 'mech.enabled': true, 'mic.enabled': true },
+      seconds: 1,
+      programme: 'silence',
+    });
+    const whine = rms(quiet.left, 4800, quiet.left.length);
+    if (whine < 1e-4) fail(stage, `a silent clip came out silent (rms ${whine.toExponential(2)}) — the camera always has audio`);
+
+    // 12-bit at 32 kHz cannot carry 16 kHz and up; 16-bit at 48 kHz can.
+    const s16 = await renderAudio(page, { settings: { 'audio.mode': '16' }, seconds: 0.5, programme: 'noise' });
+    const s12 = await renderAudio(page, { settings: { 'audio.mode': '12' }, seconds: 0.5, programme: 'noise' });
+    const hi16 = bandEnergy(s16.left, 48000, 16500, 20000, 4800);
+    const hi12 = bandEnergy(s12.left, 48000, 16500, 20000, 4800);
+    const mid16 = bandEnergy(s16.left, 48000, 2000, 6000, 4800);
+    const mid12 = bandEnergy(s12.left, 48000, 2000, 6000, 4800);
+    const cut = 10 * Math.log10((hi16 / mid16) / Math.max(hi12 / mid12, 1e-12));
+    if (cut < 15) fail(stage, `12-bit mode removes only ${cut.toFixed(1)} dB above 16 kHz relative to 16-bit`);
+
+    // The automatic gain: a loud second, then silence. The room tone rises
+    // through the silence as the gain comes back up.
+    const agc = await renderAudio(page, {
+      settings: { 'mic.enabled': true, 'mic.room': -60, 'agc.enabled': true, 'agc.release': 1.5, 'agc.maxGain': 30 },
+      seconds: 4,
+      programme: 'burst',
+    });
+    const sr = 48000;
+    const early = rms(agc.left, Math.round(1.1 * sr), Math.round(1.4 * sr));
+    const late = rms(agc.left, Math.round(3.4 * sr), Math.round(3.9 * sr));
+    const lift = 20 * Math.log10(late / Math.max(early, 1e-9));
+    if (lift < 6) fail(stage, `the AGC did not breathe: room tone rose only ${lift.toFixed(1)} dB after the loud passage`);
+    note(stage, `worklet ok · silent clip still has the camera (rms ${whine.toExponential(1)}) · 12-bit −${cut.toFixed(0)} dB above 16 kHz · AGC lifts the room +${lift.toFixed(1)} dB`);
+  } catch (err) {
+    fail(stage, String(err));
   }
 }
 
@@ -525,137 +544,186 @@ async function settledStats(page, { minMean = 20, tolerance = 2.5, timeout = 150
  * 5. Keyframes animate the render, and ease between
  * ================================================================== */
 
+/** Find a parameter row by its label in a given tab and section. */
+const UI_HELPERS = `
+  window.__ui = {
+    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    setInput(el, value) {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, String(value));
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    },
+    async tab(name) {
+      [...document.querySelectorAll('.tabs button')].find((b) => b.textContent.trim() === name)?.click();
+      await this.sleep(300);
+    },
+    async section(title) {
+      const s = [...document.querySelectorAll('.group')].find((x) => x.querySelector('.group-title')?.textContent === title);
+      if (!s) throw new Error('no section ' + title);
+      if (!s.classList.contains('open')) s.querySelector('.group-toggle').click();
+      await this.sleep(300);
+      return s;
+    },
+    row(section, label) {
+      const r = [...section.querySelectorAll('.param')].find((x) => x.querySelector('.param-label')?.textContent === label);
+      if (!r) throw new Error('no parameter ' + label);
+      return r;
+    },
+  };
+`;
+
 {
+  const stage = 'keyframes';
   const { page } = await openPage();
   try {
-    // A calm look, so the brightness is not dominated by flicker and leaks.
-    await page.selectOption('.topbar-actions select', 'reference');
+    await page.selectOption('.topbar-actions select', 'prosumer-2003');
     await dropStill(page, `g.fillStyle = '#909090'; g.fillRect(0, 0, w, h);`);
     await settledStats(page);
+    await page.evaluate(UI_HELPERS);
     const r = await page.evaluate(async () => {
-      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-      const setInput = (el, value) => {
-        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, String(value));
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-      };
-      [...document.querySelectorAll('.tabs button')].find((b) => b.textContent.trim() === 'Lens')?.click();
-      await sleep(300);
-      const row = [...document.querySelectorAll('.param')].find((x) => x.querySelector('.param-label')?.textContent === 'Exposure');
-      if (!row) throw new Error('could not find the Exposure parameter');
+      const ui = window.__ui;
+      await ui.tab('Camera');
+      const sect = await ui.section('Exposure');
+      const row = ui.row(sect, 'Compensation');
       row.querySelector('.stopwatch').click();
-      await sleep(200);
+      await ui.sleep(200);
       const scrub = document.querySelector('input.scrub');
-      setInput(scrub, 4);
-      await sleep(200);
-      setInput(row.querySelector("input[type='range']"), -3);
-      await sleep(200);
+      ui.setInput(scrub, 4);
+      await ui.sleep(200);
+      ui.setInput(row.querySelector("input[type='range']"), -2);
+      await ui.sleep(200);
       const diamonds = document.querySelectorAll('.track .key').length;
       const app = document.querySelector('.stage canvas');
       const p = document.createElement('canvas');
       p.width = 64;
-      p.height = 44;
+      p.height = 48;
       const g = p.getContext('2d', { willReadFrequently: true });
       const mean = () => {
-        g.drawImage(app, 0, 0, 64, 44);
-        const d = g.getImageData(0, 0, 64, 44).data;
+        g.drawImage(app, 0, 0, 64, 48);
+        const d = g.getImageData(0, 0, 64, 48).data;
         let s = 0;
         for (let i = 0; i < d.length; i += 4) s += d[i + 1];
         return s / (d.length / 4);
       };
       const levels = [];
       for (const t of [0, 2, 4]) {
-        setInput(scrub, t);
-        // Average a run of samples once the value has stopped moving.
+        ui.setInput(scrub, t);
         let last = -1;
-        for (let k = 0; k < 40; k++) {
-          await sleep(120);
+        for (let k = 0; k < 60; k++) {
+          await ui.sleep(250);
           const m = mean();
-          if (Math.abs(m - last) < 3) break;
+          if (Math.abs(m - last) < 1.5) break;
           last = m;
         }
-        let acc = 0;
-        for (let k = 0; k < 5; k++) {
-          await sleep(60);
-          acc += mean();
-        }
-        levels.push(acc / 5);
+        levels.push(mean());
       }
       return { diamonds, levels };
     });
-    if (r.diamonds !== 2) fail('keyframes', `expected 2 keyframe markers, drew ${r.diamonds}`);
+    if (r.diamonds !== 2) fail(stage, `expected 2 keyframe markers, drew ${r.diamonds}`);
     const [a, mid, b] = r.levels;
-    if (a - b < 30) fail('keyframes', `three stops less exposure barely changed the render (${a.toFixed(1)} → ${b.toFixed(1)})`);
+    if (a - b < 30) fail(stage, `two stops less exposure barely changed the render (${a.toFixed(1)} → ${b.toFixed(1)})`);
     if (mid < Math.min(a, b) + 3 || mid > Math.max(a, b) - 3) {
-      fail('keyframes', `midpoint ${mid.toFixed(1)} is not between ${a.toFixed(1)} and ${b.toFixed(1)} — stepping, not easing`);
+      fail(stage, `midpoint ${mid.toFixed(1)} is not between ${a.toFixed(1)} and ${b.toFixed(1)} — stepping, not easing`);
     }
-    note('keyframes', `${r.diamonds} markers · brightness ${r.levels.map((v) => v.toFixed(0)).join(' → ')}`);
+    note(stage, `${r.diamonds} markers · brightness ${r.levels.map((v) => v.toFixed(0)).join(' → ')}`);
   } catch (err) {
-    fail('keyframes', String(err));
+    fail(stage, String(err));
   }
   await page.close();
 }
 
 /* ================================================================== *
- * 6. The output frame is the shape of the projected picture
+ * 6. The output frame is the shape of the picture
  * ================================================================== */
 
 {
+  const stage = 'framing';
   const { page } = await openPage();
   try {
+    await page.evaluate(UI_HELPERS);
     const ratios = await page.evaluate(async () => {
-      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-      [...document.querySelectorAll('.tabs button')].find((b) => b.textContent.trim() === 'Gate')?.click();
-      await sleep(300);
-      const sect = [...document.querySelectorAll('.group')].find((s) => s.querySelector('.group-title')?.textContent === 'Framing & Output');
-      if (!sect) throw new Error('no Framing & Output section');
-      if (!sect.classList.contains('open')) sect.querySelector('.group-toggle').click();
-      await sleep(300);
-      const row = [...document.querySelectorAll('.param')].find((r) => r.querySelector('.param-label')?.textContent === 'Aspect');
-      const select = row.querySelector('select');
-      const out = {};
-      for (const v of ['1.85', '1.33', '2.39']) {
-        select.value = v;
-        select.dispatchEvent(new Event('change', { bubbles: true }));
+      const ui = window.__ui;
+      await ui.tab('Camera');
+      const fmt = await ui.section('Format');
+      const camAspect = ui.row(fmt, 'Aspect').querySelector('select');
+      await ui.tab('Display');
+      const out = await ui.section('Output');
+      const outAspect = ui.row(out, 'Aspect').querySelector('select');
+      const res = {};
+      const wait = async (want) => {
         let ratio = 0;
-        for (let k = 0; k < 25; k++) {
-          await sleep(100);
+        for (let k = 0; k < 30; k++) {
+          await ui.sleep(100);
           const c = document.querySelector('.stage canvas');
           ratio = c.width / c.height;
-          if (Math.abs(ratio - Number(v)) < 0.02) break;
+          if (Math.abs(ratio - want) < 0.02) break;
         }
-        out[v] = ratio;
-      }
-      return out;
+        return ratio;
+      };
+      outAspect.value = '16:9';
+      outAspect.dispatchEvent(new Event('change', { bubbles: true }));
+      res['forced 16:9'] = await wait(16 / 9);
+      outAspect.value = 'camera';
+      outAspect.dispatchEvent(new Event('change', { bubbles: true }));
+      res['4:3 camera'] = await wait(4 / 3);
+      await ui.tab('Camera');
+      camAspect.value = '16:9';
+      camAspect.dispatchEvent(new Event('change', { bubbles: true }));
+      res['16:9 camera'] = await wait(16 / 9);
+      return res;
     });
-    for (const [want, got] of Object.entries(ratios)) {
-      if (Math.abs(got - Number(want)) > 0.03) fail('framing', `asked for ${want}, the frame is ${got.toFixed(3)}`);
+    const want = { 'forced 16:9': 16 / 9, '4:3 camera': 4 / 3, '16:9 camera': 16 / 9 };
+    for (const [k, got] of Object.entries(ratios)) {
+      if (Math.abs(got - want[k]) > 0.03) fail(stage, `${k}: the frame is ${got.toFixed(3)}, not ${want[k].toFixed(3)}`);
     }
-    note('framing', Object.entries(ratios).map(([k, v]) => `${k} → ${v.toFixed(3)}`).join(' · '));
+    note(stage, Object.entries(ratios).map(([k, v]) => `${k} → ${v.toFixed(3)}`).join(' · '));
   } catch (err) {
-    fail('framing', String(err));
+    fail(stage, String(err));
   }
   await page.close();
 }
 
 /* ================================================================== *
- * 7. Every frame is a function of its number
- *
- * Nothing in the chain accumulates, so seeking cannot lose anything and an
- * export that steps by seeking renders exactly what playback shows. Asserted
- * by rendering the same frame after different histories.
+ * 7. Off is exactly off, and a frame does not depend on its history
+ *    where it should not
  * ================================================================== */
 
 {
+  const stage = 'purity';
   const { page } = main;
-  const s = (await page.evaluate(() => window.__filmbox.presets?.['super8-1974'])) ?? {};
-  for (const backend of ['gpu', 'cpu']) {
-    const req = { backend, settings: s, source: { kind: 'texture', panPxPerSec: 90, cell: 6 }, width: 160, height: 110, srcWidth: 160, srcHeight: 110 };
-    const a = await probe(page, { ...req, frames: [3, 4, 5, 9] });
-    const b = await probe(page, { ...req, frames: [9] });
-    const d = meanAbsDiff(a.frames[3], b.frames[0]);
-    if (d > 0.01) fail('purity', `${backend}: frame 9 differs by ${d.toFixed(3)}/px depending on what was rendered before it`);
-    else note('purity', `${backend}: frame 9 identical whether rendered after 3, 4, 5 or on its own`);
+  try {
+    // With every section of every engine off, the camera is a window: the
+    // output is the source, through the DV raster and back.
+    const req = { settings: { ...ALL_OFF, 'framing.scaler': 'good', 'framing.dither': 0 }, source: { kind: 'scene' }, width: 704, height: 528, srcWidth: 704, srcHeight: 528, frames: [0] };
+    for (const backend of ['gpu', 'cpu']) {
+      const out = (await probe(page, { ...req, backend })).frames[0];
+      const src = await page.evaluate(async () => {
+        const url = window.__camai.probeSourceImage({ kind: 'scene' }, 704, 528, 0);
+        const img = new Image();
+        img.src = url;
+        await img.decode();
+        const c = document.createElement('canvas');
+        c.width = 704;
+        c.height = 528;
+        const g = c.getContext('2d', { willReadFrequently: true });
+        g.drawImage(img, 0, 0);
+        return Array.from(g.getImageData(0, 0, 704, 528).data).filter((_, i) => i % 4 !== 3);
+      });
+      const d = meanAbsDiff(out, { rgb: src });
+      if (d > 1.6) fail(stage, `${backend}: with everything off the output differs from the source by ${d.toFixed(2)}/px`);
+      else note(stage, `${backend}: everything off → source within ${d.toFixed(2)}/px (the DV raster's resampling)`);
+    }
+    // Frames are a function of their number and of the frames before them
+    // in order — the automatics and concealment have memory — but with the
+    // automatics off, history must not matter at all.
+    const r2 = { backend: 'cpu', settings: { ...DV }, source: { kind: 'texture', panPxPerSec: 120, cell: 6 }, ...NATIVE };
+    const a = await probe(page, { ...r2, frames: [3, 4, 5, 9] });
+    const b = await probe(page, { ...r2, frames: [9] });
+    const dd = meanAbsDiff(a.frames[3], b.frames[0]);
+    if (dd > 0.01) fail(stage, `frame 9 differs by ${dd.toFixed(3)}/px depending on what was rendered before it`);
+    else note(stage, 'frame 9 identical whether rendered after 3, 4, 5 or on its own');
+  } catch (err) {
+    fail(stage, String(err));
   }
 }
 
@@ -668,15 +736,14 @@ async function settledStats(page, { minMean = 20, tolerance = 2.5, timeout = 150
   try {
     const { page, noise } = await openPage(url);
     await dropStill(page, `g.fillStyle = '#d8d8d8'; g.fillRect(0, 0, w, h);`, 320, 240);
-    const s = await settledStats(page, { timeout: 20000 });
+    const s = await settledStats(page, { timeout: 30000 });
     const mounted = await page.evaluate(() => (document.getElementById('root')?.innerHTML || '').length);
     if (mounted < 500) fail('packaged', `the app did not mount over file:// (root is ${mounted} chars)`);
-    if (s.lit < 0.3) fail('packaged', `mounted over file:// but the film is black (${(s.lit * 100).toFixed(1)}% lit)`);
-    // The worklet and its imported event clock have to load over file:// too.
+    if (s.lit < 0.3) fail('packaged', `mounted over file:// but the picture is black (${(s.lit * 100).toFixed(1)}% lit)`);
     const worklet = await page.evaluate(async () => {
       try {
         const ctx = new OfflineAudioContext(1, 128, 48000);
-        await ctx.audioWorklet.addModule(new URL('worklets/filmbox-dsp.js', document.baseURI).href);
+        await ctx.audioWorklet.addModule(new URL('worklets/camai-dsp.js', document.baseURI).href);
         return 'ok';
       } catch (err) {
         return String(err);
@@ -695,74 +762,56 @@ async function settledStats(page, { minMean = 20, tolerance = 2.5, timeout = 150
  * 9. Every section actually reaches the picture
  *
  * A parameter can exist in the schema, move its slider, and never reach a
- * shader. Each picture section is pushed hard from the same baseline and
- * the render must change.
+ * shader (CRTBOX, lesson 6). Each picture section is switched on, with its
+ * own defaults or the setting that makes it act, from the same baseline,
+ * and the render must change.
  * ================================================================== */
 
 {
+  const stage = 'sections';
   const { page } = main;
-  const baseline = { 'format.stock': 'vision3_250d', 'camera.weave': 0, 'projector.weave': 0 };
-  const cases = [
-    ['curve.gamma', 1.6],
-    ['curve.toe', 0.6],
-    ['curve.shoulder', -1],
-    ['curve.push', 2],
-    ['grain.amount', 3],
-    ['grain.size', 2.5],
-    ['halation.amount', 5],
-    ['halation.noBacking', true],
-    ['dye.saturation', 2],
-    ['dye.impurity', 2.5],
-    ['print.process', 'scan'],
-    ['print.stock', 'eastman5381'],
-    ['print.red', 35],
-    ['print.generations', 4],
-    ['print.bleachBypass', 1],
-    ['fade.years', 60],
-    ['exposure.stops', 1.5],
-    ['exposure.light', 'tungsten'],
-    ['exposure.filter85', true],
-    ['lens.resolution', 12],
-    ['lens.vignette', 2.5],
-    ['lens.chromatic', 40],
-    ['lens.flare', 0.2],
-    ['lens.distortion', 0.2],
-    ['anamorphic.enabled', true],
-    ['camera.weave', 80],
-    ['camera.flicker', 0.6],
-    ['projector.weave', 80],
-    ['projector.hotspot', 2],
-    ['projector.focus', 60],
-    ['projector.warmth', 1],
-    ['projector.framing', 0.3],
-    ['gatedirt.specks', 1],
-    ['gatedirt.hair', 1],
-    ['filmdirt.dust', 1],
-    ['filmdirt.fibres', 1],
-    ['scratch.rate', 1],
-    ['leak.rollFog', 2],
-    ['leak.edgeFog', 1],
-    ['decay.vinegar', 1],
-    ['decay.mould', 1],
-    ['decay.water', 1],
-    ['decay.flaking', 1],
-    ['decay.channelling', 1],
-    ['telecine.black', 0.08],
-    ['telecine.saturation', 0],
-    ['framing.overscan', 0.5],
-  ];
-  const req = { backend: 'gpu', source: { kind: 'bars' }, width: 288, height: 200, frames: [2] };
-  const ref = (await probe(page, { ...req, settings: baseline })).frames[0];
-  const quiet = [];
-  for (const [key, value] of cases) {
-    const f = (await probe(page, { ...req, settings: { ...baseline, [key]: value } })).frames[0];
-    const d = meanAbsDiff(ref, f);
-    // The baseline is deterministic — same frame, same seed — so anything wired
-    // changes it; sparse things like a speck change it only a little.
-    if (d < 0.1) quiet.push(`${key}=${value} (${d.toFixed(2)})`);
+  try {
+    const baseline = { ...DV, 'engine.camera': false, 'interlace.enabled': true };
+    const cases = [
+      ['operator', { 'operator.enabled': true, 'operator.sway': 2 }],
+      ['lens', { 'lens.enabled': true, 'lens.zoom': 3 }],
+      ['exposure', { 'exposure.enabled': true, 'exposure.scene': 0, 'exposure.mode': 'manual', 'exposure.comp': 1.5 }],
+      ['sensor', { 'sensor.enabled': true }],
+      ['focus', { 'focus.enabled': true, 'focus.miss': 3 }],
+      ['wb', { 'wb.enabled': true, 'wb.light': 'tungsten' }],
+      ['eis', { 'eis.enabled': true }],
+      ['dzoom', { 'lens.enabled': true, 'lens.zoom': 40, 'dzoom.enabled': true }],
+      ['tone', { 'tone.enabled': true }],
+      ['detail', { 'detail.enabled': true }],
+      ['battery', { 'battery.enabled': true, 'battery.charge': 0 }],
+      ['night', { 'night.enabled': true }],
+      ['fx', { 'fx.enabled': true, 'fx.effect': 'sepia' }],
+      ['interlace', { 'interlace.integration': false }],
+      ['chroma', { 'chroma.upsample': 'nearest' }],
+      ['codec', { 'codec.budget': 0.3 }],
+      ['tape', { 'tape.enabled': true, 'tape.clogs': 5, 'tape.clogLength': 5 }],
+      ['breaks', { 'breaks.enabled': true, 'breaks.rate': 20, 'breaks.seamless': false }],
+      ['osd', { 'osd.enabled': true }],
+      ['date', { 'date.enabled': true }],
+      ['capture', { 'capture.enabled': true, 'capture.path': 'composite' }],
+      ['deint', { 'deint.enabled': true, 'deint.mode': 'discard' }],
+      ['upload', { 'upload.enabled': true }],
+    ];
+    const req = { backend: 'gpu', source: { kind: 'scene' }, ...NATIVE, frames: [24] };
+    const ref = (await probe(page, { ...req, settings: baseline })).frames[0];
+    const quiet = [];
+    for (const [name, extra] of cases) {
+      const f = (await probe(page, { ...req, settings: { ...baseline, ...extra, 'engine.camera': true } })).frames[0];
+      // The camera engine back on with only this camera section enabled
+      // (the master folds the rest off), or this tape or display section.
+      const d = meanAbsDiff(ref, f);
+      if (d < 0.05) quiet.push(`${name} (${d.toFixed(3)})`);
+    }
+    if (quiet.length) fail(stage, `these did not change the picture: ${quiet.join(', ')}`);
+    note(stage, `${cases.length - quiet.length}/${cases.length} sections measurably reach the render`);
+  } catch (err) {
+    fail(stage, String(err));
   }
-  if (quiet.length) fail('sections', `these did not change the picture: ${quiet.join(', ')}`);
-  note('sections', `${cases.length - quiet.length}/${cases.length} picture parameters measurably reach the render`);
 }
 
 /* ================================================================== *
@@ -771,7 +820,7 @@ async function settledStats(page, { minMean = 20, tolerance = 2.5, timeout = 150
 
 {
   const { page } = await openPage(base, { guide: true });
-  const out = { shown: false, closed: false, reopened: false, films: 0, hidden: false, f1: false, param: '', section: '' };
+  const out = { shown: false, closed: false, reopened: false, cameras: 0, hidden: false, f1: false, param: '', section: '' };
   try {
     out.shown = (await page.$('.guide')) !== null;
     await page.evaluate(() => document.querySelector('.guide-close')?.click());
@@ -782,33 +831,30 @@ async function settledStats(page, { minMean = 20, tolerance = 2.5, timeout = 150
     out.reopened = (await page.$('.guide')) !== null;
     await page.evaluate(() => [...document.querySelectorAll('.guide-tabs button')].find((b) => b.textContent.includes('Reference'))?.click());
     await page.waitForSelector('.guide-film', { timeout: 3000 }).catch(() => undefined);
-    out.films = await page.evaluate(() => document.querySelectorAll('.guide-film').length);
+    out.cameras = await page.evaluate(() => document.querySelectorAll('.guide-film').length);
     await page.evaluate(() => {
       const box = document.querySelector('.guide-foot .check input');
       if (box && !box.checked) box.click();
     });
     await page.evaluate(() => document.querySelector('.guide-close')?.click());
     await page.reload({ waitUntil: 'load' });
-    await page.waitForFunction(() => !!window.__filmbox && !!document.querySelector('.stage canvas'), null, { timeout: 60000 });
+    await page.waitForFunction(() => !!window.__camai && !!document.querySelector('.stage canvas'), null, { timeout: 60000 });
     out.hidden = (await page.$('.guide')) === null;
     await page.keyboard.press('F1');
     await page.waitForSelector('.guide', { timeout: 3000 }).catch(() => undefined);
     out.f1 = (await page.$('.guide')) !== null;
     await page.keyboard.press('Escape');
     await page.waitForSelector('.guide', { state: 'detached', timeout: 3000 }).catch(() => undefined);
+    await page.evaluate(UI_HELPERS);
     const info = await page.evaluate(async () => {
-      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-      [...document.querySelectorAll('.tabs button')].find((b) => b.textContent.trim() === 'Stock')?.click();
-      await sleep(300);
-      const sect = [...document.querySelectorAll('.group')].find((g) => g.querySelector('.group-title')?.textContent === 'Characteristic Curve');
-      if (!sect) throw new Error('no Characteristic Curve section');
+      const ui = window.__ui;
+      await ui.tab('Tape');
+      const sect = await ui.section('DV Codec');
       sect.querySelector('.group-info-btn').click();
-      if (!sect.classList.contains('open')) sect.querySelector('.group-toggle').click();
-      await sleep(300);
-      const row = [...document.querySelectorAll('.param')].find((r) => r.querySelector('.param-label')?.textContent === 'Toe position');
-      if (!row) throw new Error('no Toe position parameter');
+      await ui.sleep(300);
+      const row = ui.row(sect, 'Bit budget');
       row.querySelector('.param-info-btn').click();
-      await sleep(300);
+      await ui.sleep(300);
       return {
         section: document.querySelector('.group-info')?.textContent?.trim() ?? '',
         param: row.querySelector('.param-info')?.textContent?.trim() ?? '',
@@ -822,567 +868,613 @@ async function settledStats(page, { minMean = 20, tolerance = 2.5, timeout = 150
   if (!out.shown) fail('guide', 'not shown on first run');
   if (!out.closed) fail('guide', 'the close button did not close it');
   if (!out.reopened) fail('guide', 'the header button did not reopen it');
-  if (out.films < 10) fail('guide', `only ${out.films} reference films listed`);
+  if (out.cameras < 10) fail('guide', `only ${out.cameras} reference cameras listed`);
   if (!out.hidden) fail('guide', '"don\'t show on startup" did not survive a reload');
   if (!out.f1) fail('guide', 'F1 did not reopen it');
   if (out.param.length < 80) fail('guide', `a parameter's ⓘ revealed only ${out.param.length} characters`);
   if (out.section.length < 150) fail('guide', `a section's ⓘ revealed only ${out.section.length} characters`);
-  note('guide', `shown, closes, reopens, ${out.films} films, remembered, F1 · ⓘ ${out.param.length} / ${out.section.length} chars`);
+  note('guide', `shown, closes, reopens, ${out.cameras} cameras, remembered, F1 · ⓘ ${out.param.length} / ${out.section.length} chars`);
   await page.close();
 }
 
 /* ================================================================== *
- * 11. The film, measured
+ * 11. The camcorder, measured
  * ================================================================== */
 
-const { page: lab } = main;
-const G = { width: 578, height: 400, srcWidth: 578, srcHeight: 400 };
+const lab = main.page;
 
-/**
- * Slope of log2(output light) against log2(exposure), across a ramp. With the
- * telecine off, video log-light is an exact straight line in film density, so
- * this slope is the characteristic curve's own, read off the screen.
- */
-async function curveProfile(settings, stops, window = 0.8) {
-  const res = await probe(lab, {
-    backend: 'gpu',
-    settings: { ...CLEAN, ...settings, 'exposure.headroom': 0, 'exposure.stops': stops },
-    source: { kind: 'ramp', stops: 16 },
-    ...G,
-    frames: [0],
-  });
-  const f = res.frames[0];
-  const W = res.width;
-  const pts = [];
-  for (let x = 0; x < W; x++) {
-    let s = 0;
-    for (let y = 180; y < 220; y++) s += f.rgb[(y * W + x) * 3 + 1];
-    s /= 40;
-    const u = 0.5 + ((x + 0.5) / W - 0.5) * window;
-    pts.push({ ev: -16 * (1 - u) + stops - Math.log2(0.18), out: Math.log2(Math.max(srgbToLinear(s), 1e-6)), code: s });
-  }
-  // Least-squares slope over 1.4-stop windows.
-  const slopes = [];
-  const span = Math.round(W * (1.4 / (16 * window)));
-  for (let i = 0; i + span < W; i += Math.max(4, Math.floor(span / 3))) {
-    const seg = pts.slice(i, i + span).filter((p) => p.code > 3 && p.code < 252);
-    if (seg.length < span * 0.8) continue;
-    const mx = seg.reduce((a, p) => a + p.ev, 0) / seg.length;
-    const my = seg.reduce((a, p) => a + p.out, 0) / seg.length;
-    let sxy = 0;
-    let sxx = 0;
-    for (const p of seg) {
-      sxy += (p.ev - mx) * (p.out - my);
-      sxx += (p.ev - mx) ** 2;
-    }
-    slopes.push({ ev: mx, slope: sxy / sxx, code: seg[Math.floor(seg.length / 2)].code });
-  }
-  return slopes;
-}
-
-const at = (profile, ev) => profile.reduce((b, p) => (Math.abs(p.ev - ev) < Math.abs(b.ev - ev) ? p : b));
-
-/* ---- 11a. the characteristic curve has a toe and a shoulder ---- */
+/* ---- 11a. the field clock: two moments a frame, bottom first ---- */
 {
-  const stage = 'curve';
+  const stage = 'fields';
   try {
-    const shadowsLin = await curveProfile({ 'curve.enabled': false }, 1);
-    const linMid = at(shadowsLin, -1).slope;
-    const linLow = at(shadowsLin, -5).slope;
-    if (Math.abs(linMid - 1) > 0.12 || Math.abs(linLow - 1) > 0.25) {
-      fail(stage, `the straight-line control is not straight (slope ${linLow.toFixed(2)} low, ${linMid.toFixed(2)} mid) — the measurement is wrong, not the film`);
-    }
-    const rows = [];
-    for (const [name, stock, shoulderEv] of [
-      ['Kodachrome', 'kodachrome40', 2.2],
-      ['Vision3 + print', 'vision3_250d', 3.5],
-    ]) {
-      const shadows = await curveProfile({ 'format.stock': stock }, 1);
-      const highs = await curveProfile({ 'format.stock': stock }, 4);
-      const mid = Math.max(...shadows.filter((p) => p.ev > -2 && p.ev < 1).map((p) => p.slope));
-      const toe = at(shadows, -5.5).slope;
-      const shoulder = at(highs, shoulderEv).slope;
-      if (!(toe < 0.5 * mid)) fail(stage, `${name}: no toe — slope ${toe.toFixed(2)} at −5.5 stops against ${mid.toFixed(2)} mid`);
-      if (!(shoulder < 0.5 * mid)) fail(stage, `${name}: no shoulder — slope ${shoulder.toFixed(2)} at +${shoulderEv} stops against ${mid.toFixed(2)} mid`);
-      rows.push(`${name} ${toe.toFixed(2)} / ${mid.toFixed(2)} / ${shoulder.toFixed(2)}`);
-    }
-    note(stage, `slope toe / mid / shoulder: linear ${linLow.toFixed(2)} / ${linMid.toFixed(2)} · ${rows.join(' · ')}`);
-  } catch (err) {
-    fail(stage, String(err));
-  }
-}
-
-/* ---- 11b. reversal clips sooner and harder than negative ---- */
-{
-  const stage = 'latitude';
-  try {
-    // Clear film has to land below video white here, or the film's own
-    // highlight end and the display's clip coincide and cannot be told apart.
-    const visible = { 'engine.gate': true, 'camera.enabled': false, 'projector.enabled': false, 'telecine.white': 0.7 };
-    const knee = async (stock) => {
-      const p = await curveProfile({ 'format.stock': stock, ...visible }, 4);
-      const ups = p.filter((q) => q.ev > -1);
-      const peak = Math.max(...ups.map((q) => q.slope));
-      const peakAt = ups.find((q) => q.slope === peak).ev;
-      const after = ups.filter((q) => q.ev > peakAt);
-      const cross = (frac) => after.find((q) => q.slope < frac * peak)?.ev ?? 99;
-      return { at80: cross(0.8), at20: cross(0.2) };
-    };
-    const rev = await knee('kodachrome40');
-    const neg = await knee('vision3_250d');
-    const revWidth = rev.at20 - rev.at80;
-    const negWidth = neg.at20 - neg.at80;
-    if (!(rev.at20 < neg.at20 - 1)) {
-      fail(stage, `reversal does not clip sooner: its highlights flatten at +${rev.at20.toFixed(1)} stops, the negative's at +${neg.at20.toFixed(1)}`);
-    }
-    if (!(revWidth < negWidth)) {
-      fail(stage, `reversal does not clip harder: its shoulder spans ${revWidth.toFixed(1)} stops, the negative's ${negWidth.toFixed(1)}`);
-    }
-    note(stage, `highlights flatten at +${rev.at20.toFixed(1)} stops on Kodachrome over ${revWidth.toFixed(1)} stops, +${neg.at20 > 50 ? '>' + '6' : neg.at20.toFixed(1)} on Vision3 over ${negWidth > 50 ? '>3' : negWidth.toFixed(1)}`);
-  } catch (err) {
-    fail(stage, String(err));
-  }
-}
-
-/* ---- 11c. grain is fixed to the film, not to the picture ---- */
-{
-  const stage = 'grain/gate';
-  try {
-    // Flat grey: the only structure is grain. Same film frame, same seed.
-    const grainy = {
-      'engine.lens': false,
-      'halation.enabled': false,
-      'grain.amount': 2.5,
-      'camera.enabled': true,
-      'camera.flicker': 0,
-      'projector.enabled': true,
-      'projector.weave': 0,
-      'projector.hotspot': 0,
-      'framing.overscan': -0.2,
-      'telecine.enabled': false,
-    };
-    const W = 200;
-    const H = 140;
-    const req = { backend: 'gpu', source: { kind: 'grey', level: 0.5 }, width: W, height: H, srcWidth: W, srcHeight: H, frames: [5] };
-    const grain = async (extra) => highpass(luma((await probe(lab, { ...req, settings: { ...grainy, ...extra } })).frames[0], W, H), W, H, 2);
-    const still = await grain({ 'camera.weave': 0 });
-    // The camera's registration error moves the image relative to the film:
-    // the grain must stay exactly where it was.
-    const camera = await grain({ 'camera.weave': 80 });
-    const cam = bestShift(still, camera, W, H, 4);
-    // The projector moves the strip: grain goes with it. Framing by 0.02
-    // frames on Super 8 is 0.085 mm, which at this size is a known shift.
-    const shiftMm = 0.02 * 4.234;
-    const visH = 4.01 * 0.8;
-    const expectPx = Math.round((shiftMm / visH) * H);
-    const proj = await grain({ 'camera.weave': 0, 'projector.framing': 0.02 });
-    const pr = bestShift(still, proj, W, H, 6);
-    if (!(cam.dx === 0 && cam.dy === 0 && cam.c > 0.9)) {
-      fail(stage, `grain moved with the camera's registration error (best match at ${cam.dx},${cam.dy}, r=${cam.c.toFixed(2)}) — it is not on the film`);
-    }
-    if (!(Math.abs(Math.abs(pr.dy) - expectPx) <= 1 && pr.dx === 0 && pr.c > 0.6)) {
-      fail(stage, `grain did not travel with the strip in the projector: best match at ${pr.dx},${pr.dy} (r=${pr.c.toFixed(2)}), expected 0,±${expectPx}`);
-    }
-    note(stage, `camera weave: grain stays (r=${cam.c.toFixed(2)} at 0,0) · projector moves strip ${expectPx}px: grain follows (r=${pr.c.toFixed(2)} at ${pr.dx},${pr.dy})`);
-  } catch (err) {
-    fail(stage, String(err));
-  }
-}
-
-/* ---- 11d. grain scales with the format ---- */
-{
-  const stage = 'grain/size';
-  try {
-    const W = 240;
-    const H = 166;
-    const power = async (gauge) => {
-      const f = (await probe(lab, {
-        backend: 'gpu',
-        settings: { 'engine.gate': false, 'engine.lens': false, 'halation.enabled': false, 'format.gauge': gauge, 'format.stock': 'vision3_250d', 'framing.aspect': '1.44' },
-        source: { kind: 'grey', level: 0.5 },
-        width: W,
-        height: H,
-        srcWidth: W,
-        srcHeight: H,
-        frames: [0],
-      })).frames[0];
-      const hp = highpass(luma(f, W, H), W, H, 3);
-      return stdOf(hp, W, H) ** 2;
-    };
-    const s8 = await power('super8');
-    const m16 = await power('mm16');
-    const m35 = await power('mm35');
-    if (!(s8 > 3 * m35 && s8 > m16 && m16 > m35)) {
-      fail(stage, `the same stock is not grainier on a smaller frame: power ${s8.toFixed(2)} Super 8, ${m16.toFixed(2)} 16 mm, ${m35.toFixed(2)} 35 mm`);
-    }
-    note(stage, `Vision3 250D grain power: Super 8 ${s8.toFixed(2)} · 16 mm ${m16.toFixed(2)} · 35 mm ${m35.toFixed(2)} (${(s8 / m35).toFixed(1)}×)`);
-  } catch (err) {
-    fail(stage, String(err));
-  }
-}
-
-/* ---- 11e. gate dirt persists; film dirt lasts one frame ---- */
-{
-  const stage = 'dirt';
-  try {
-    const W = 200;
-    const H = 140;
-    const quiet = {
-      'engine.lens': false,
-      'grain.enabled': false,
-      'halation.enabled': false,
-      'camera.weave': 0,
-      'camera.flicker': 0,
-      'projector.weave': 20,
-      'projector.hotspot': 0,
-      'format.stock': 'kodachrome40',
-    };
-    const specks = async (extra) => {
-      const res = await probe(lab, {
-        backend: 'gpu',
-        settings: { ...quiet, ...extra },
-        source: { kind: 'grey', level: 0.55 },
-        width: W,
-        height: H,
-        srcWidth: W,
-        srcHeight: H,
-        frames: [0, 1, 2, 3, 4, 5, 6, 7],
-      });
-      return res.frames.map((f) => {
-        const l = luma(f, W, H);
-        const sorted = [...l].sort((a, b) => a - b);
-        const med = sorted[Math.floor(sorted.length / 2)];
-        const mask = new Uint8Array(W * H);
-        for (let i = 0; i < l.length; i++) if (l[i] < med - 25) mask[i] = 1;
-        return mask;
-      });
-    };
-    const jaccard = (a, b) => {
-      let i = 0;
-      let u = 0;
-      for (let k = 0; k < a.length; k++) {
-        if (a[k] && b[k]) i++;
-        if (a[k] || b[k]) u++;
+    // A bar moving at 600 source pixels a second, from an infinitely fast
+    // source: whatever the frame shows about time came from the clock.
+    const src = { kind: 'bar', pxPerSec: 600, width: 12 };
+    const base1 = { ...DV, 'sensor.enabled': false, 'codec.enabled': false, 'chroma.enabled': false };
+    const shift = async (settings) => {
+      const f = (await probe(lab, { backend: 'gpu', settings, source: src, ...NATIVE, srcWidth: 720, srcHeight: 540, frames: [10] })).frames[0];
+      const Y = luma(f, 720, 480);
+      let even = 0;
+      let odd = 0;
+      let ne = 0;
+      let no = 0;
+      for (let y = 40; y < 440; y++) {
+        const c = barCentre(Y, 720, y);
+        if (Number.isNaN(c)) continue;
+        if (y % 2 === 0) {
+          even += c;
+          ne++;
+        } else {
+          odd += c;
+          no++;
+        }
       }
-      return u ? i / u : 1;
+      return even / ne - odd / no;
     };
-    const avgOverlap = (masks) => {
+    const bff = await shift(base1);
+    const tff = await shift({ ...base1, 'interlace.lowerFirst': false });
+    const prog = await shift({ ...base1, 'interlace.enabled': false });
+    // One field period of motion: 600 px/s × 1/59.94 s, through the 704/720
+    // mapping of source to active picture.
+    const expect = (600 / (60000 / 1001)) * (704 / 720);
+    if (Math.abs(bff - expect) > expect * 0.3) fail(stage, `the top field is ${bff.toFixed(1)} px from the bottom one, expected +${expect.toFixed(1)} (bottom field first, one field apart)`);
+    if (Math.abs(tff + expect) > expect * 0.3) fail(stage, `with top field first the offset is ${tff.toFixed(1)}, expected −${expect.toFixed(1)}`);
+    if (Math.abs(prog) > 1) fail(stage, `progressive frames still split by ${prog.toFixed(1)} px`);
+    note(stage, `top field is ${bff.toFixed(1)} px later (expect ${expect.toFixed(1)}): bottom first · top-first ${tff.toFixed(1)} · progressive ${prog.toFixed(2)}`);
+  } catch (err) {
+    fail(stage, String(err));
+  }
+}
+
+/* ---- 11b. deinterlacing: weave combs, bob does not, discard halves ---- */
+{
+  const stage = 'deinterlace';
+  try {
+    const run = async (mode, pxPerSec, kind = 'bar') => {
+      const settings = { ...DV, 'codec.enabled': false, 'deint.enabled': mode !== 'none', 'deint.mode': mode === 'none' ? 'weave' : mode };
+      const source = kind === 'bar' ? { kind: 'bar', pxPerSec, width: 40 } : { kind: 'zone' };
+      const f = (await probe(lab, { backend: 'gpu', settings, source, ...NATIVE, frames: [12] })).frames[0];
+      return luma(f, 720, 480);
+    };
+    const weaveMove = combing(await run('weave', 900), 720, 480);
+    const weaveStill = combing(await run('weave', 0), 720, 480);
+    const bobMove = combing(await run('bob', 900), 720, 480);
+    const zoneWeave = verticalDetail(await run('weave', 0, 'zone'), 720, 480, 100, 620);
+    const zoneDiscard = verticalDetail(await run('discard', 0, 'zone'), 720, 480, 100, 620);
+    if (weaveMove < 1.3) fail(stage, `weave on motion is not combed (adjacent/two-apart ${weaveMove.toFixed(2)})`);
+    if (weaveStill > 1.1) fail(stage, `weave combs a still picture (${weaveStill.toFixed(2)})`);
+    if (bobMove > 0.9) fail(stage, `bob still combs on motion (${bobMove.toFixed(2)})`);
+    if (zoneDiscard > zoneWeave * 0.6) fail(stage, `discarding a field kept ${((zoneDiscard / zoneWeave) * 100).toFixed(0)}% of the vertical detail`);
+    note(stage, `weave combs on motion ${weaveMove.toFixed(2)} vs still ${weaveStill.toFixed(2)} · bob ${bobMove.toFixed(2)} · discard keeps ${((zoneDiscard / zoneWeave) * 100).toFixed(0)}% of vertical detail`);
+  } catch (err) {
+    fail(stage, String(err));
+  }
+}
+
+/* ---- 11c. DCT blocks: on the DV raster's 8-pixel grid, scaled with the output ---- */
+{
+  const stage = 'blocking';
+  try {
+    // A smooth gradient beside a patch of noise. The noise starves the
+    // segments; the gradient pays for it in blocks.
+    const src = { kind: 'noise', amount: 0.6 };
+    const on = (await probe(lab, { backend: 'gpu', settings: { ...DV }, source: src, ...NATIVE, frames: [0] })).frames[0];
+    const off = (await probe(lab, { backend: 'gpu', settings: { ...DV, 'codec.enabled': false }, source: src, ...NATIVE, frames: [0] })).frames[0];
+    const rOn = blockRatio(luma(on, 720, 480), 720, 480, 300, 700);
+    const rOff = blockRatio(luma(off, 720, 480), 720, 480, 300, 700);
+    if (rOn < 1.3) fail(stage, `boundary/interior gradient ${rOn.toFixed(2)} in the smooth area — no blocks on the 8-pixel grid`);
+    if (Math.abs(rOff - 1) > 0.15) fail(stage, `with the codec off the boundary ratio is ${rOff.toFixed(2)}, not 1`);
+    // At 1080p the same blocks are 8 × 1440/704 output pixels apart.
+    const big = (await probe(lab, { backend: 'gpu', settings: { 'framing.dither': 0, 'framing.scaler': 'nearest' }, source: src, width: 1440, height: 1080, frames: [0] })).frames[0];
+    const Y = luma(big, 1440, 1080);
+    const prof = new Float64Array(1440);
+    for (let y = 0; y < 1080; y++) for (let x = 700; x < 1430; x++) prof[x] += Math.abs(Y[y * 1440 + x] - Y[y * 1440 + x - 1]);
+    let best = 0;
+    let bestLag = 0;
+    for (let lag = 10; lag <= 26; lag++) {
+      let c = 0;
+      for (let x = 720; x + lag < 1430; x++) c += prof[x] * prof[x + lag];
+      if (c > best) {
+        best = c;
+        bestLag = lag;
+      }
+    }
+    const expect = (8 * 1440) / 704;
+    if (Math.abs(bestLag - expect) > 1.2) fail(stage, `at 1080p the blocks repeat every ${bestLag} px, expected ${expect.toFixed(1)}`);
+    note(stage, `boundary/interior ${rOn.toFixed(2)} with the codec, ${rOff.toFixed(2)} without · ${bestLag} px period at 1080p (8 × ${(1440 / 704).toFixed(2)})`);
+  } catch (err) {
+    fail(stage, String(err));
+  }
+}
+
+/* ---- 11d. the constant bit budget is shared across the frame ---- */
+{
+  const stage = 'budget';
+  try {
+    // The same gradient, with and without noise in the left third. The error
+    // in the right third, which the noise never touches, must grow: its
+    // segments share their bits with macroblocks in the noisy third.
+    const err = async (amount) => {
+      const src = { kind: 'noise', amount };
+      const on = (await probe(lab, { backend: 'cpu', settings: { ...DV }, source: src, ...NATIVE, frames: [0], qno: true })).frames[0];
+      const off = (await probe(lab, { backend: 'cpu', settings: { ...DV, 'codec.enabled': false }, source: src, ...NATIVE, frames: [0] })).frames[0];
+      const q = on.qno.reduce((a, b) => a + b, 0) / on.qno.length;
+      return { psnr: psnr(luma(on, 720, 480), luma(off, 720, 480), 720, 480, 480, 712), q };
+    };
+    const clean = await err(0);
+    const noisy = await err(0.6);
+    if (noisy.psnr > clean.psnr - 3) fail(stage, `noise in the left third cost the untouched right third only ${(clean.psnr - noisy.psnr).toFixed(1)} dB`);
+    if (noisy.q > clean.q - 2) fail(stage, `the mean quantisation number moved only ${clean.q.toFixed(1)} → ${noisy.q.toFixed(1)}`);
+    note(stage, `noise in a third of the frame: right third ${clean.psnr.toFixed(1)} → ${noisy.psnr.toFixed(1)} dB, mean quantiser ${clean.q.toFixed(1)} → ${noisy.q.toFixed(1)}`);
+  } catch (err) {
+    fail(stage, String(err));
+  }
+}
+
+/* ---- 11e. against the real thing: FFmpeg's dvvideo ---- */
+{
+  const stage = 'dvvideo';
+  const ff = require('ffmpeg-static');
+  if (!ff || !existsSync(ff)) {
+    fail(stage, 'ffmpeg-static is not installed; the comparison against the real encoder could not run');
+  } else {
+    const dir = await mkdtemp(join(tmpdir(), 'camai-dv-'));
+    try {
+      const W = 720;
+      const H = 480;
+      const settings = { ...DV, 'interlace.enabled': false };
+      const raw = (rgb) => Buffer.from(Uint8Array.from(rgb));
+      const lines = [];
+      for (const src of [{ kind: 'scene' }, { kind: 'zone' }, { kind: 'noise', amount: 0.5 }]) {
+        const r = { backend: 'cpu', source: src, width: W, height: H, srcWidth: 704, srcHeight: 480, frames: [0] };
+        // The pre-codec frame both encoders get, with and without DV's 4:1:1.
+        const full = (await probe(lab, { ...r, settings: { ...settings, 'codec.enabled': false, 'chroma.enabled': false } })).frames[0];
+        const sub = (await probe(lab, { ...r, settings: { ...settings, 'codec.enabled': false, 'chroma.enabled': true } })).frames[0];
+        const ours = (await probe(lab, { ...r, settings: { ...settings, 'codec.enabled': true } })).frames[0];
+        await writeFile(join(dir, 'ref.rgb'), raw(full.rgb));
+        const conv = (args) => execFileSync(ff, ['-y', '-loglevel', 'error', ...args], { cwd: dir });
+        conv(['-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', `${W}x${H}`, '-i', 'ref.rgb', '-pix_fmt', 'yuv411p', '-c:v', 'dvvideo', '-r', '30000/1001', '-frames:v', '1', '-f', 'dv', 'real.dv']);
+        conv(['-i', 'real.dv', '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'real.rgb']);
+        conv(['-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', `${W}x${H}`, '-i', 'ref.rgb', '-pix_fmt', 'yuv411p', '-f', 'rawvideo', 'conv.yuv']);
+        conv(['-f', 'rawvideo', '-pix_fmt', 'yuv411p', '-s', `${W}x${H}`, '-i', 'conv.yuv', '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'conv.rgb']);
+        const real = { rgb: Array.from(await readFile(join(dir, 'real.rgb'))) };
+        const realRef = { rgb: Array.from(await readFile(join(dir, 'conv.rgb'))) };
+        // Codec-only error: each encoder against its own 4:1:1 reference.
+        const m = (a, b) => {
+          const A = luma(a, W, H);
+          const B = luma(b, W, H);
+          const e = A.map((v, i) => v - B[i]);
+          return { psnr: psnr(A, B, W, H, 16, 704), blk: blockRatio(e.map((v) => v + 128), W, H, 16, 704) };
+        };
+        const mo = m(ours, sub);
+        const mr = m(real, realRef);
+        lines.push(`${src.kind} ${mo.psnr.toFixed(1)}/${mr.psnr.toFixed(1)} dB blk ${mo.blk.toFixed(2)}/${mr.blk.toFixed(2)}`);
+        if (Math.abs(mo.psnr - mr.psnr) > 4) fail(stage, `${src.kind}: codec PSNR ${mo.psnr.toFixed(1)} dB against FFmpeg's ${mr.psnr.toFixed(1)} — more than 4 dB apart`);
+        if (Math.abs(mo.blk - mr.blk) > 0.3) fail(stage, `${src.kind}: blocking ratio ${mo.blk.toFixed(2)} against FFmpeg's ${mr.blk.toFixed(2)}`);
+      }
+      note(stage, `emulation/FFmpeg, codec error only: ${lines.join(' · ')}`);
+    } catch (err) {
+      fail(stage, String(err));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+}
+
+/* ---- 11f. chroma subsampling: 4:1:1 bleeds four pixels, 4:2:0 two and down ---- */
+{
+  const stage = 'chroma';
+  try {
+    const spread = async (system) => {
+      const settings = { ...DV, 'format.system': system, 'codec.enabled': false, 'chroma.upsample': 'nearest' };
+      const H = system === 'pal' ? 576 : 480;
+      const f = (await probe(lab, { backend: 'cpu', settings, source: { kind: 'redline', width: 1 }, width: 720, height: H, srcWidth: 704, srcHeight: H, frames: [0] })).frames[0];
+      const cr = crOf(f, 720, H);
+      // Horizontal: columns along a row in the upper half whose Cr departs from grey.
+      const row = Math.round(H * 0.3);
+      let h = 0;
+      for (let x = 300; x < 420; x++) if (Math.abs(cr[row * 720 + x]) > 6) h++;
+      // Vertical: rows round the horizontal red line whose Cr departs.
+      let v = 0;
+      for (let y = Math.round(H * 0.6); y < Math.round(H * 0.9); y++) if (Math.abs(cr[y * 720 + 100]) > 6) v++;
+      return { h, v };
+    };
+    const ntsc = await spread('ntsc');
+    const pal = await spread('pal');
+    if (ntsc.h < 4 || ntsc.h > 5) fail(stage, `525/60's 4:1:1 spreads a 1-pixel red line over ${ntsc.h} pixels, expected 4`);
+    if (pal.h < 2 || pal.h > 3) fail(stage, `625/50's 4:2:0 spreads it over ${pal.h} pixels, expected 2`);
+    if (pal.v < 2 || pal.v <= ntsc.v) fail(stage, `4:2:0 should spread a horizontal red line vertically more than 4:1:1 does (${pal.v} rows against ${ntsc.v})`);
+    note(stage, `red line: 4:1:1 → ${ntsc.h} px wide, ${ntsc.v} rows · 4:2:0 → ${pal.h} px wide, ${pal.v} rows`);
+  } catch (err) {
+    fail(stage, String(err));
+  }
+}
+
+/* ---- 11g. detail enhancement: edges overshoot; coring spares the noise ---- */
+{
+  const stage = 'detail';
+  try {
+    const edge = async (on) => {
+      const settings = { ...DV, 'codec.enabled': false, 'detail.enabled': on, 'detail.gain': 1.5 };
+      const f = (await probe(lab, { backend: 'cpu', settings, source: { kind: 'edge', low: 0.25, high: 0.65 }, ...NATIVE, srcWidth: 704, srcHeight: 480, frames: [0] })).frames[0];
+      const Y = luma(f, 720, 480);
+      const row = 240;
+      const lowPlateau = Y[row * 720 + 200];
+      const highPlateau = Y[row * 720 + 560];
+      let max = 0;
+      let min = 255;
+      for (let x = 340; x < 380; x++) {
+        max = Math.max(max, Y[row * 720 + x]);
+        min = Math.min(min, Y[row * 720 + x]);
+      }
+      return { over: max - highPlateau, under: lowPlateau - min };
+    };
+    const off = await edge(false);
+    const on = await edge(true);
+    if (on.over < 4 || on.under < 3) fail(stage, `the edge does not overshoot both plateaus (+${on.over.toFixed(1)} / −${on.under.toFixed(1)})`);
+    if (off.over > 1.5 || off.under > 1.5) fail(stage, `without enhancement the edge already overshoots (+${off.over.toFixed(1)})`);
+    // Coring: low-level noise is not boosted.
+    const noiseStd = async (coring) => {
+      const settings = { ...DV, 'codec.enabled': false, 'detail.enabled': true, 'detail.gain': 2, 'detail.coring': coring };
+      const f = (await probe(lab, { backend: 'cpu', settings, source: { kind: 'noise', amount: 0.03 }, ...NATIVE, frames: [0] })).frames[0];
+      const Y = luma(f, 720, 480);
       let s = 0;
-      for (let k = 1; k < masks.length; k++) s += jaccard(masks[k - 1], masks[k]);
-      return s / (masks.length - 1);
-    };
-    const gate = await specks({ 'gatedirt.specks': 1, 'gatedirt.life': 30 });
-    const film = await specks({ 'filmdirt.dust': 1 });
-    const gateCount = gate[0].reduce((a, b) => a + b, 0);
-    const filmCount = film[0].reduce((a, b) => a + b, 0);
-    const go = avgOverlap(gate);
-    const fo = avgOverlap(film);
-    if (gateCount < 20 || filmCount < 20) fail(stage, `not enough dirt to measure (${gateCount} gate px, ${filmCount} film px)`);
-    if (!(go > 0.8)) fail(stage, `gate dirt did not persist from frame to frame (overlap ${go.toFixed(2)})`);
-    if (!(fo < 0.15)) fail(stage, `film dirt persisted from frame to frame (overlap ${fo.toFixed(2)}) — it should last one frame`);
-    note(stage, `frame-to-frame overlap: gate grit ${go.toFixed(2)} (stays put while the strip weaves) · film dust ${fo.toFixed(2)}`);
-  } catch (err) {
-    fail(stage, String(err));
-  }
-}
-
-/* ---- 11f. polarity: dirt on the negative prints white ---- */
-{
-  const stage = 'polarity';
-  try {
-    const W = 200;
-    const H = 140;
-    const extreme = async (extra) => {
-      const f = (await probe(lab, {
-        backend: 'gpu',
-        settings: { 'engine.lens': false, 'grain.enabled': false, 'camera.weave': 0, 'projector.weave': 0, 'filmdirt.dust': 1, ...extra },
-        source: { kind: 'grey', level: 0.45 },
-        width: W,
-        height: H,
-        srcWidth: W,
-        srcHeight: H,
-        frames: [1],
-      })).frames[0];
-      const l = luma(f, W, H);
-      const sorted = [...l].sort((a, b) => a - b);
-      const med = sorted[Math.floor(sorted.length / 2)];
-      let dark = 0;
-      let bright = 0;
-      for (const v of l) {
-        if (v < med - 30) dark++;
-        if (v > med + 30) bright++;
+      let n = 0;
+      for (let y = 100; y < 380; y++) for (let x = 40; x < 200; x++) {
+        const d = Y[y * 720 + x] - Y[y * 720 + x + 1];
+        s += d * d;
+        n++;
       }
-      return { dark, bright };
+      return Math.sqrt(s / n);
     };
-    const reversal = await extreme({ 'format.stock': 'kodachrome40' });
-    const printed = await extreme({ 'format.stock': 'vision3_250d', 'filmdirt.negative': 1 });
-    if (!(reversal.dark > 10 * Math.max(1, reversal.bright))) fail(stage, `dust on reversal is not dark (${reversal.dark} dark, ${reversal.bright} bright px)`);
-    if (!(printed.bright > 10 * Math.max(1, printed.dark))) fail(stage, `dust on a printed negative is not white (${printed.bright} bright, ${printed.dark} dark px)`);
-    note(stage, `dust on reversal: ${reversal.dark} dark px · on a negative, printed: ${printed.bright} white px`);
+    const cored = await noiseStd(0.05);
+    const raw = await noiseStd(0);
+    if (cored > raw * 0.8) fail(stage, `coring did not spare the noise (${cored.toFixed(2)} cored against ${raw.toFixed(2)} uncored)`);
+    note(stage, `edge overshoot +${on.over.toFixed(1)} / −${on.under.toFixed(1)} (off: +${off.over.toFixed(1)}) · noise ${raw.toFixed(2)} → ${cored.toFixed(2)} with coring`);
   } catch (err) {
     fail(stage, String(err));
   }
 }
 
-/* ---- 11g. halation is red ---- */
+/* ---- 11h. a CCD smears and a CMOS leans ---- */
 {
-  const stage = 'halation';
+  const stage = 'sensors';
   try {
-    const W = 240;
-    const H = 166;
-    const f = (await probe(lab, {
-      backend: 'gpu',
-      settings: { 'engine.gate': false, 'engine.lens': false, 'grain.enabled': false, 'format.stock': 'vision3_500t', 'halation.amount': 4 },
-      source: { kind: 'bars' },
-      width: W,
-      height: H,
-      srcWidth: W,
-      srcHeight: H,
-      frames: [0],
-    })).frames[0];
-    // Just above the white box, in what should be black.
-    const x0 = Math.round(W * 0.12);
-    const x1 = Math.round(W * 0.25);
-    const y = Math.round(H * 0.79);
-    let r = 0;
-    let g = 0;
-    let b = 0;
-    for (let x = x0; x < x1; x++) {
-      const i = (y * W + x) * 3;
-      r += f.rgb[i];
-      g += f.rgb[i + 1];
-      b += f.rgb[i + 2];
-    }
-    const n = x1 - x0;
-    r /= n;
-    g /= n;
-    b /= n;
-    if (!(r > g + 4 && g >= b)) fail(stage, `the glow round a highlight is not red-orange (R ${r.toFixed(0)}, G ${g.toFixed(0)}, B ${b.toFixed(0)})`);
-    note(stage, `glow beside a white patch on black: R ${r.toFixed(0)} · G ${g.toFixed(0)} · B ${b.toFixed(0)}`);
-  } catch (err) {
-    fail(stage, String(err));
-  }
-}
-
-/* ---- 11h. fading is per-dye, towards magenta ---- */
-{
-  const stage = 'fading';
-  try {
-    const W = 80;
-    const H = 56;
-    const grey = async (years) => {
-      const f = (await probe(lab, {
-        backend: 'gpu',
-        settings: { 'engine.gate': false, 'engine.lens': false, 'grain.enabled': false, 'format.gauge': 'mm35', 'format.stock': 'eastman5247', 'print.stock': 'eastman5381', 'fade.years': years, 'fade.storage': 'warm' },
-        source: { kind: 'grey', level: 0.46 },
-        width: W,
-        height: H,
-        srcWidth: W,
-        srcHeight: H,
-        frames: [0],
-      })).frames[0];
-      return f.mean;
+    // A point light in sun at 1/1000 s: on a CCD its column glows the full
+    // height of the frame; a CMOS has no vertical registers to leak into.
+    const column = async (sensor) => {
+      const settings = { ...DV, 'codec.enabled': false, 'sensor.enabled': true, 'format.sensor': sensor, 'sensor.noise': 0, 'sensor.shot': 0, 'exposure.enabled': true, 'exposure.mode': 'manual', 'exposure.scene': 0, 'exposure.shutter': '1000', 'sensor.headroom': 8 };
+      const f = (await probe(lab, { backend: 'cpu', settings, source: { kind: 'point', size: 3 }, ...NATIVE, srcWidth: 704, srcHeight: 480, frames: [0] })).frames[0];
+      const Y = luma(f, 720, 480);
+      const cx = Math.round(8 + 704 * 0.4);
+      const colMean = (x, y0, y1) => {
+        let s = 0;
+        for (let y = y0; y < y1; y++) s += Y[y * 720 + x];
+        return s / (y1 - y0);
+      };
+      let peak = cx;
+      for (let x = cx - 4; x <= cx + 4; x++) if (colMean(x, 300, 470) > colMean(peak, 300, 470)) peak = x;
+      const lit = colMean(peak, 300, 470);
+      const top = colMean(peak, 5, 120);
+      const dark = colMean(peak + 40, 300, 470);
+      return { lit, top, dark };
     };
-    const fresh = await grey(0);
-    const old = await grey(40);
-    const chroma = (c) => [c[0] - c[1], c[2] - c[1]];
-    const [freshR, freshB] = chroma(fresh);
-    const [oldR, oldB] = chroma(old);
-    if (Math.abs(freshR) > 6 || Math.abs(freshB) > 6) fail(stage, `a fresh print of grey is not grey (${fresh.map((v) => v.toFixed(0)).join(',')})`);
-    if (!(oldR > 15 && oldB > 5)) {
-      fail(stage, `forty warm years did not turn grey magenta: R−G ${oldR.toFixed(1)}, B−G ${oldB.toFixed(1)} (${old.map((v) => v.toFixed(0)).join(',')})`);
-    }
-    note(stage, `5381 grey: fresh ${fresh.map((v) => v.toFixed(0)).join(',')} → 40 warm years ${old.map((v) => v.toFixed(0)).join(',')} (R−G +${oldR.toFixed(0)}, B−G +${oldB.toFixed(0)})`);
-  } catch (err) {
-    fail(stage, String(err));
-  }
-}
-
-/* ---- 11i. film frames are held: 18 fps is 18 pictures a second ---- */
-{
-  const stage = 'hold';
-  try {
-    const W = 120;
-    const H = 84;
-    const res = await probe(lab, {
-      backend: 'gpu',
-      settings: { 'engine.gate': false, 'engine.lens': false, 'grain.enabled': false, 'framing.fps': '59.94' },
-      source: { kind: 'texture', panPxPerSec: 60, cell: 4 },
-      width: W,
-      height: H,
-      srcWidth: W,
-      srcHeight: H,
-      frames: Array.from({ length: 60 }, (_, i) => i),
-    });
-    let changes = 0;
-    for (let i = 1; i < res.frames.length; i++) if (meanAbsDiff(res.frames[i - 1], res.frames[i]) > 0.5) changes++;
-    // 60 output frames at 59.94 fps is just over a second: 18 film frames.
-    if (Math.abs(changes - 17) > 1) fail(stage, `${changes + 1} distinct pictures in 60 frames of 59.94 fps video, expected 18 — film frames are not being held`);
-    note(stage, `${changes + 1} distinct pictures in one second of 59.94 fps video from 18 fps film`);
-  } catch (err) {
-    fail(stage, String(err));
-  }
-}
-
-/* ---- 11j. 3:2 pulldown ---- */
-{
-  const stage = 'pulldown';
-  try {
-    const W = 64;
-    const H = 48;
-    const settings = {
-      'engine.lens': false,
-      'grain.enabled': false,
-      'halation.enabled': false,
-      'camera.enabled': false,
-      'projector.enabled': false,
-      'format.gauge': 'mm16',
-      'format.fps': '24',
-      'framing.fps': '29.97',
-      'telecine.fields': true,
-      'telecine.fieldOrder': 'upper',
-    };
-    const res = await probe(lab, { backend: 'gpu', settings, source: { kind: 'counter' }, width: W, height: H, srcWidth: W, srcHeight: H, frames: Array.from({ length: 20 }, (_, i) => i) });
-    // Each field's level, read from its own lines.
-    const fields = [];
-    for (const f of res.frames) {
-      for (const parity of [0, 1]) {
+    const ccd = await column('ccd1');
+    const cmos = await column('cmos1');
+    if (ccd.lit - ccd.dark < 6) fail(stage, `no smear column under a CCD point light (${ccd.lit.toFixed(1)} against ${ccd.dark.toFixed(1)})`);
+    if (Math.abs(ccd.top - ccd.lit) > Math.max(4, (ccd.lit - ccd.dark) * 0.35)) fail(stage, `the smear is not constant down the frame (top ${ccd.top.toFixed(1)}, bottom ${ccd.lit.toFixed(1)})`);
+    if (cmos.lit - cmos.dark > 2) fail(stage, `a CMOS sensor smears (${cmos.lit.toFixed(1)} against ${cmos.dark.toFixed(1)})`);
+    // A fast pan: verticals lean on a rolling shutter and stay upright on a CCD.
+    const lean = async (sensor) => {
+      const settings = { ...DV, 'codec.enabled': false, 'sensor.enabled': true, 'format.sensor': sensor, 'sensor.noise': 0, 'sensor.shot': 0, 'operator.enabled': true, 'operator.tremor': 0, 'operator.sway': 0, 'exposure.enabled': true, 'exposure.mode': 'manual', 'exposure.scene': 4, 'exposure.shutter': '1000' };
+      const timeline = { 'operator.pan': [{ t: 0, value: 0, ease: 'linear' }, { t: 1, value: 50, ease: 'linear' }] };
+      const f = (await probe(lab, { backend: 'cpu', settings, timeline, source: { kind: 'verticals', spacing: 90 }, ...NATIVE, frames: [15] })).frames[0];
+      const Y = luma(f, 720, 480);
+      // Track one bar from the top band to the bottom band.
+      const centreNear = (y, x0) => {
         let s = 0;
         let n = 0;
-        for (let y = parity; y < H; y += 2) {
-          for (let x = 8; x < W - 8; x++) {
-            s += f.rgb[(y * W + x) * 3 + 1];
-            n++;
+        for (let x = x0 - 30; x < x0 + 30; x++) {
+          const v = Y[y * 720 + x];
+          if (v > 120) {
+            s += x * v;
+            n += v;
           }
         }
-        fields.push(s / n);
-      }
-    }
-    // Runs of fields showing the same film frame.
-    const runs = [];
-    let len = 1;
-    for (let i = 1; i < fields.length; i++) {
-      if (Math.abs(fields[i] - fields[i - 1]) < 2) len++;
-      else {
-        runs.push(len);
-        len = 1;
-      }
-    }
-    const inner = runs.slice(1);
-    const pattern = inner.join('');
-    const ok = inner.length >= 6 && inner.every((r) => r === 2 || r === 3) && !/22|33/.test(pattern);
-    const mixed = res.frames.filter((f) => {
-      let a = 0;
-      let b = 0;
-      for (let x = 8; x < W - 8; x++) {
-        a += f.rgb[(20 * W + x) * 3 + 1];
-        b += f.rgb[(21 * W + x) * 3 + 1];
-      }
-      return Math.abs(a - b) / (W - 16) > 2;
-    }).length;
-    if (!ok) fail(stage, `field cadence is ${pattern}, not alternating 3 and 2`);
-    if (mixed !== 8) fail(stage, `${mixed} of 20 video frames mix two film frames, expected 8 (two in every five)`);
-    // Without fields the cadence is still uneven: some film frames get two video frames.
-    const prog = await probe(lab, { backend: 'gpu', settings: { ...settings, 'telecine.fields': false }, source: { kind: 'counter' }, width: W, height: H, srcWidth: W, srcHeight: H, frames: Array.from({ length: 10 }, (_, i) => i) });
-    const holds = [];
-    let h = 1;
-    for (let i = 1; i < prog.frames.length; i++) {
-      if (meanAbsDiff(prog.frames[i - 1], prog.frames[i]) < 0.5) h++;
-      else {
-        holds.push(h);
-        h = 1;
-      }
-    }
-    if (new Set(holds).size < 2) fail(stage, `progressive transfer holds every film frame equally (${holds.join(',')}) — 24 on 29.97 cannot`);
-    note(stage, `fields ${pattern} · ${mixed}/20 frames combed · progressive holds ${holds.join(',')}`);
+        return n ? s / n : NaN;
+      };
+      let x0 = 360;
+      for (let x = 330; x < 400; x++) if (Y[60 * 720 + x] > Y[60 * 720 + x0]) x0 = x;
+      const top = centreNear(60, x0);
+      const bottom = centreNear(420, Math.round(top));
+      return bottom - top;
+    };
+    const leanCcd = await lean('ccd1');
+    const leanCmos = await lean('cmos1');
+    if (Math.abs(leanCcd) > 2) fail(stage, `verticals lean ${leanCcd.toFixed(1)} px on a CCD during a pan`);
+    if (Math.abs(leanCmos) < 6) fail(stage, `verticals lean only ${leanCmos.toFixed(1)} px on a CMOS rolling shutter during a 50°/s pan`);
+    note(stage, `CCD point light → column +${(ccd.lit - ccd.dark).toFixed(1)} bottom, +${(ccd.top - ccd.dark).toFixed(1)} top; CMOS +${(cmos.lit - cmos.dark).toFixed(1)} · pan lean: CCD ${leanCcd.toFixed(1)} px, CMOS ${leanCmos.toFixed(1)} px`);
   } catch (err) {
     fail(stage, String(err));
   }
 }
 
-/* ---- 11k. a splice is a jump and a pop, from the same event ---- */
+/* ---- 11i. the knee and the wall; a single chip clips colour by colour ---- */
 {
-  const stage = 'splice';
+  const stage = 'knee';
   try {
-    const r = await lab.evaluate(async (workletBase) => {
-      const ev = await import(`${workletBase}film-events.js`);
-      const seed = 1337;
-      const rate = 12;
-      const fps = 18;
-      const frames = [];
-      for (let n = 1; n < 18 * 6; n++) if (ev.spliceAt(n, seed, rate, fps)) frames.push(n);
-      // The sound: an optical track through the worklet, silence in.
-      const sr = 48000;
-      const ctx = new OfflineAudioContext(1, sr * 6, sr);
-      await ctx.audioWorklet.addModule(`${workletBase}filmbox-dsp.js`);
-      const params = {
-        'film.cameraFps': fps,
-        'film.projectorFps': fps,
-        'audio.enabled': true,
-        'track.code': 1,
-        'optical.enabled': true,
-        'optical.noise': -120,
-        'optical.crackle': 0,
-        'optical.exciterHum': -120,
-        'playback.enabled': false,
-        'splice.enabled': true,
-        'splice.rate': rate,
-        'link.enabled': true,
-        'link.spliceToPop': 1,
-        'link.dirtToCrackle': 0,
-      };
-      const track = new AudioWorkletNode(ctx, 'film-track', { numberOfInputs: 2, outputChannelCount: [1], processorOptions: { params, seed } });
-      track.connect(ctx.destination);
-      const buf = await ctx.startRendering();
-      const d = buf.getChannelData(0);
-      const onsets = [];
-      for (let i = 0; i < d.length; i++) {
-        if (Math.abs(d[i]) > 0.05 && (onsets.length === 0 || i / sr - onsets[onsets.length - 1] > 0.3)) onsets.push(i / sr);
+    const ramp = async (sensor) => {
+      const settings = { ...DV, 'codec.enabled': false, 'chroma.enabled': false, 'tone.enabled': true, 'sensor.enabled': true, 'format.sensor': sensor, 'sensor.noise': 0, 'sensor.shot': 0, 'sensor.headroom': 0, 'sensor.smear': 0, 'exposure.enabled': true, 'exposure.mode': 'manual', 'exposure.scene': 0, 'exposure.comp': 2.2 };
+      const f = (await probe(lab, { backend: 'cpu', settings, source: { kind: 'ramp', stops: 8 }, ...NATIVE, srcWidth: 704, srcHeight: 480, frames: [0] })).frames[0];
+      const Y = luma(f, 720, 480);
+      const prof = [];
+      for (let x = 8; x < 712; x++) {
+        let s = 0;
+        for (let y = 200; y < 280; y++) s += Y[y * 720 + x];
+        prof.push(s / 80);
       }
-      return { frames, onsets };
-    }, `${base}worklets/`);
-    if (r.frames.length < 2) throw new Error(`only ${r.frames.length} splices in six seconds at 12/min — the event clock is off`);
-    // Picture: the splice frame jumps.
-    const W = 120;
-    const H = 84;
-    const settings = { 'engine.lens': false, 'grain.enabled': false, 'camera.enabled': false, 'projector.weave': 0, 'splice.rate': 12, 'splice.jump': 1 };
-    const n = r.frames[0];
-    const frames = await probe(lab, { backend: 'gpu', settings, source: { kind: 'bars' }, width: W, height: H, srcWidth: W, srcHeight: H, frames: [n - 3, n - 2, n] });
-    const steady = meanAbsDiff(frames.frames[0], frames.frames[1]);
-    const jump = meanAbsDiff(frames.frames[1], frames.frames[2]);
-    if (!(jump > steady + 5)) fail(stage, `the picture did not jump on the splice at frame ${n} (${jump.toFixed(1)}/px against ${steady.toFixed(1)})`);
-    const times = r.frames.map((k) => k / 18);
-    const unmatched = times.filter((t) => !r.onsets.some((o) => Math.abs(o - t) < 1 / 18 + 0.01));
-    if (unmatched.length) fail(stage, `splices at ${unmatched.map((t) => t.toFixed(2)).join(', ')} s made no sound (pops at ${r.onsets.map((t) => t.toFixed(2)).join(', ')})`);
-    if (r.onsets.length > times.length + 1) fail(stage, `${r.onsets.length} pops for ${times.length} splices`);
-    note(stage, `splices on frames ${r.frames.join(', ')} · picture jumps ${jump.toFixed(1)}/px · pops at ${r.onsets.map((t) => t.toFixed(2)).join(', ')} s`);
+      let chroma = 0;
+      for (let x = 8; x < 712; x++) {
+        for (let y = 230; y < 250; y++) {
+          const o = (y * 720 + x) * 3;
+          const r = f.rgb[o];
+          const g = f.rgb[o + 1];
+          const b = f.rgb[o + 2];
+          if (r + g + b > 450) chroma = Math.max(chroma, Math.max(Math.abs(r - g), Math.abs(b - g), Math.abs(r - b)));
+        }
+      }
+      return { prof, chroma };
+    };
+    const ccd3 = await ramp('ccd3');
+    const ccd1 = await ramp('ccd1');
+    // Slope per stop at three places along the ramp (88 px a stop).
+    const p = ccd3.prof;
+    const top = Math.max(...p);
+    const clipAt = p.findIndex((v) => v > top - 0.5);
+    const slopeAt = (i) => (p[Math.min(p.length - 1, i + 22)] - p[Math.max(0, i - 22)]) / 0.5;
+    const kneeAt = p.findIndex((v) => v > top * 0.8);
+    const sMid = slopeAt(Math.round(kneeAt * 0.6));
+    const sKnee = slopeAt(Math.round((kneeAt + clipAt) / 2));
+    const sTop = slopeAt(Math.min(p.length - 23, clipAt + 40));
+    if (!(sMid > sKnee * 1.4)) fail(stage, `no knee: slope ${sMid.toFixed(1)} below it, ${sKnee.toFixed(1)} above`);
+    if (Math.abs(sTop) > 0.5) fail(stage, `no wall: still rising ${sTop.toFixed(2)}/stop past the clip`);
+    if (ccd1.chroma < ccd3.chroma + 10) fail(stage, `a single chip clips no more colourfully than three (${ccd1.chroma} against ${ccd3.chroma})`);
+    note(stage, `slope ${sMid.toFixed(0)} → ${sKnee.toFixed(0)} → ${sTop.toFixed(1)} /stop: knee and wall · near clip, chroma excursion ${ccd1.chroma} single-chip vs ${ccd3.chroma} three-chip`);
+  } catch (err) {
+    fail(stage, String(err));
+  }
+}
+
+/* ---- 11j. an overlay's path is visible ---- */
+{
+  const stage = 'overlays';
+  try {
+    const run = async (insert, path = 'firewire') => {
+      const settings = { ...DV, 'date.enabled': true, 'date.insert': insert, 'date.colour': 'orange', 'capture.enabled': path !== 'firewire', 'capture.path': path };
+      const f = (await probe(lab, { backend: 'cpu', settings, source: { kind: 'grey', level: 0.4 }, ...NATIVE, frames: [0] })).frames[0];
+      return f;
+    };
+    const pre = await run('precodec');
+    const dec = await run('decode');
+    const decComp = await run('decode', 'composite');
+    // The date sits in the bottom-left corner. Text pixels are where the
+    // after-decode render has ink; the halo is everything within 6 px of it.
+    const W = 720;
+    const y0 = 380;
+    const y1 = 470;
+    const isInk = (f, i) => f.rgb[i * 3] > 150;
+    const mask = new Uint8Array(W * 480);
+    for (let y = y0; y < y1; y++) for (let x = 20; x < 250; x++) if (isInk(dec, y * W + x)) mask[y * W + x] = 1;
+    const grey = luma(dec, W, 480)[100 * W + 360];
+    const halo = (f) => {
+      const Y = luma(f, W, 480);
+      const cr = crOf(f, W, 480);
+      let ring = 0;
+      let bleed = 0;
+      let n = 0;
+      for (let y = y0; y < y1; y++) {
+        for (let x = 24; x < 246; x++) {
+          const i = y * W + x;
+          if (mask[i]) continue;
+          let near = false;
+          for (let d = -6; d <= 6 && !near; d++) if (mask[i + d]) near = true;
+          if (!near) continue;
+          // The black edge is part of the glyph; look past it.
+          let edge = false;
+          for (let d = -2; d <= 2 && !edge; d++) for (let e = -2; e <= 2; e++) if (mask[i + e * W + d]) edge = true;
+          if (edge) continue;
+          ring += Math.abs(Y[i] - grey);
+          bleed += Math.abs(cr[i]);
+          n++;
+        }
+      }
+      return { ring: ring / n, bleed: bleed / n };
+    };
+    const sharp = (f) => {
+      const Y = luma(f, W, 480);
+      let s = 0;
+      for (let y = y0; y < y1; y++) for (let x = 21; x < 250; x++) s += Math.abs(Y[y * W + x] - Y[y * W + x - 1]);
+      return s;
+    };
+    const hp = halo(pre);
+    const hd = halo(dec);
+    if (hp.bleed < hd.bleed * 1.5 + 0.5) fail(stage, `burned in before the codec the date's colour does not bleed (${hp.bleed.toFixed(2)} against ${hd.bleed.toFixed(2)} after decode)`);
+    if (hp.ring < hd.ring + 0.3) fail(stage, `burned in before the codec the glyphs do not ring (${hp.ring.toFixed(2)} against ${hd.ring.toFixed(2)})`);
+    const sd = sharp(dec);
+    const sc = sharp(decComp);
+    if (sc > sd * 0.85) fail(stage, `a composite capture did not soften the overlay (edge energy ${sc.toFixed(0)} against ${sd.toFixed(0)})`);
+    note(stage, `before the codec: bleed ${hp.bleed.toFixed(2)} ring ${hp.ring.toFixed(2)} · after decode: bleed ${hd.bleed.toFixed(2)} ring ${hd.ring.toFixed(2)} · composite capture keeps ${((sc / sd) * 100).toFixed(0)}% of the edges`);
+  } catch (err) {
+    fail(stage, String(err));
+  }
+}
+
+/* ---- 11k. the clocks: wall time jumps at a break, tape time does not ---- */
+{
+  const stage = 'clocks';
+  try {
+    const settings = { ...DV, 'codec.enabled': false, 'breaks.enabled': true, 'breaks.rate': 12, 'breaks.gap': 30, 'breaks.skip': 1.5, 'date.enabled': true };
+    const frames = Array.from({ length: 300 }, (_, i) => i);
+    const r = await probe(lab, { backend: 'cpu', settings, source: { kind: 'texture', panPxPerSec: 200, cell: 8 }, width: 64, height: 48, frames, pixels: true });
+    const fps = 30000 / 1001;
+    let jumps = 0;
+    let smooth = 0;
+    let tcBreaks = 0;
+    let cutAt = -1;
+    for (let i = 1; i < r.frames.length; i++) {
+      const a = r.frames[i - 1];
+      const b = r.frames[i];
+      const dw = (b.clock.wallMs - a.clock.wallMs) / 1000;
+      const dtc = b.clock.timecode - a.clock.timecode;
+      if (b.clock.shot !== a.clock.shot) {
+        jumps++;
+        if (dw < 60) fail(stage, `at the break before frame ${i} the date moved only ${dw.toFixed(1)} s`);
+        if (cutAt < 0) cutAt = i;
+      } else if (Math.abs(dw - 1 / fps) < 0.002) smooth++;
+      if (Math.abs(dtc - 1 / fps) > 0.002) tcBreaks++;
+    }
+    if (jumps < 1) fail(stage, 'no recording break in ten seconds at twelve a minute');
+    if (tcBreaks > 0) fail(stage, `the tape counter jumped ${tcBreaks} times; it should run straight across breaks`);
+    if (smooth < r.frames.length - 1 - jumps - 2) fail(stage, `the date did not advance in real time within shots (${smooth} smooth steps)`);
+    // The cut is in the picture at the same frame.
+    const diffs = r.frames.slice(1).map((f, i) => meanAbsDiff(r.frames[i], f));
+    const median = [...diffs].sort((a, b) => a - b)[Math.floor(diffs.length / 2)];
+    if (cutAt > 0 && diffs[cutAt - 1] < median * 2) fail(stage, `the break at frame ${cutAt} is not a cut in the picture (${diffs[cutAt - 1].toFixed(1)} against a median ${median.toFixed(1)})`);
+    note(stage, `${jumps} breaks in 10 s: date jumps ≥ 1 min each, counter continuous, first cut at frame ${cutAt} (Δ ${diffs[cutAt - 1]?.toFixed(1)} vs median ${median.toFixed(1)})`);
+  } catch (err) {
+    fail(stage, String(err));
+  }
+}
+
+/* ---- 11l. a dropout is the previous frame on the macroblock grid, and a mute ---- */
+{
+  const stage = 'dropouts';
+  try {
+    const settings = { ...DV, 'tape.enabled': true, 'tape.dropouts': 900, 'tape.size': 0.2, 'tape.conceal': 'previous' };
+    const frames = Array.from({ length: 12 }, (_, i) => i);
+    const r = await probe(lab, { backend: 'cpu', settings, source: { kind: 'texture', panPxPerSec: 300, cell: 5 }, ...NATIVE, frames });
+    const rect = (m) => (m < 1320 ? [(m % 22) * 32, Math.floor(m / 22) * 8, 32, 8] : [704, (m - 1320) * 16, 16, 16]);
+    let checked = 0;
+    let worst = 0;
+    let differOutside = 0;
+    for (let i = 1; i < r.frames.length; i++) {
+      const f = r.frames[i];
+      if (!f.lostMBs?.length) continue;
+      const prev = r.frames[i - 1];
+      for (const m of f.lostMBs) {
+        const [x0, y0, w, h] = rect(m);
+        for (let y = y0; y < y0 + h; y++) {
+          for (let x = x0; x < x0 + w; x++) {
+            const o = (y * 720 + x) * 3;
+            for (let c = 0; c < 3; c++) worst = Math.max(worst, Math.abs(f.rgb[o + c] - prev.rgb[o + c]));
+          }
+        }
+        checked++;
+      }
+      differOutside += meanAbsDiff(f, prev);
+    }
+    if (checked === 0) fail(stage, 'no dropouts happened at 900 a minute');
+    if (worst > 0) fail(stage, `concealed macroblocks differ from the previous frame by up to ${worst}`);
+    if (differOutside < 1) fail(stage, 'the frames with dropouts are identical to the previous ones throughout — the source is not moving');
+
+    // The sound: whole-frame dropouts mute the same frames the picture
+    // freezes, from the same event clock.
+    const events = await import(pathToFileURL(join(here, '..', 'public', 'worklets', 'camai-events.js')).href);
+    const fps = 30000 / 1001;
+    const audio = await renderAudio(lab, {
+      settings: { 'mech.enabled': true, 'mech.transport': -30, 'tape.enabled': true, 'tape.dropouts': 120, 'tape.size': 1 },
+      seconds: 3,
+      programme: 'silence',
+    });
+    const sr = audio.sampleRate;
+    let hits = 0;
+    let misses = 0;
+    let falseMutes = 0;
+    for (let n = 2; n < Math.floor(3 * fps) - 1; n++) {
+      const d = events.dropoutAt(n, 1337, 120, fps, 1, 10);
+      const a = Math.round(((n + 0.3) / fps) * sr);
+      const b = Math.round(((n + 0.7) / fps) * sr);
+      const level = rms(audio.left, a, b);
+      if (d) {
+        if (level < 1e-4) hits++;
+        else misses++;
+      } else if (level < 1e-4) {
+        const before = events.dropoutAt(n - 1, 1337, 120, fps, 1, 10);
+        if (!before) falseMutes++;
+      }
+    }
+    if (hits === 0) fail(stage, 'no frame-long dropout muted the sound');
+    if (misses > 0) fail(stage, `${misses} dropout frames kept their sound`);
+    if (falseMutes > 0) fail(stage, `${falseMutes} frames without a dropout were muted`);
+    note(stage, `${checked} lost macroblocks, each exactly the previous frame (max diff ${worst}) · ${hits} whole-frame dropouts muted the sound at the same frames, ${misses} missed`);
+  } catch (err) {
+    fail(stage, String(err));
+  }
+}
+
+/* ---- 11m. the A/V link: the zoom is heard while it moves; a break clunks ---- */
+{
+  const stage = 'avlink';
+  try {
+    const timeline = { 'lens.zoom': [{ t: 0, value: 1, ease: 'linear' }, { t: 1, value: 1, ease: 'linear' }, { t: 2, value: 10, ease: 'linear' }, { t: 3, value: 10, ease: 'linear' }] };
+    const a = await renderAudio(lab, {
+      settings: { 'lens.enabled': true, 'mech.enabled': true, 'mech.transport': -90, 'mech.zoom': -20 },
+      timeline,
+      seconds: 3,
+      programme: 'silence',
+    });
+    const sr = a.sampleRate;
+    const band = (t0, t1) => bandEnergy(a.left, sr, 700, 2500, Math.round(t0 * sr), Math.round(t1 * sr));
+    const still = band(0.2, 0.28);
+    const moving = band(1.4, 1.48);
+    const after = band(2.6, 2.68);
+    if (moving < still * 100 || moving < after * 100) fail(stage, `zoom motor energy ${moving.toExponential(1)} while zooming against ${still.toExponential(1)} before and ${after.toExponential(1)} after`);
+    // A recording break: the clunk is on the frame the picture cuts.
+    const events = await import(pathToFileURL(join(here, '..', 'public', 'worklets', 'camai-events.js')).href);
+    const shots = new events.Shots(1337, { enabled: true, rate: 12, skip: 0.5, gap: 10, seamless: true });
+    shots.atOutput(8);
+    const cut = shots.list.find((s) => s.out0 > 0.5 && s.out0 < 7);
+    if (!cut) throw new Error('no break in the first seconds');
+    const b = await renderAudio(lab, {
+      settings: { 'mech.enabled': true, 'mech.transport': -90, 'mech.rec': -10, 'breaks.enabled': true, 'breaks.rate': 12, 'breaks.skip': 0.5, 'breaks.gap': 10 },
+      seconds: Math.min(8, cut.srcEndPrev + 1),
+      programme: 'silence',
+    });
+    let peakAt = 0;
+    let peak = 0;
+    const from = Math.round((cut.out0 - 0.4) * b.sampleRate);
+    const to = Math.round((cut.out0 + 0.4) * b.sampleRate);
+    for (let i = from; i < to; i++) {
+      if (Math.abs(b.left[i]) > peak) {
+        peak = Math.abs(b.left[i]);
+        peakAt = i;
+      }
+    }
+    const fps = 30000 / 1001;
+    const cutFrame = Math.floor(cut.out0 * fps + 1e-6);
+    const clunkFrame = Math.floor((peakAt / b.sampleRate) * fps);
+    if (Math.abs(clunkFrame - cutFrame) > 2) fail(stage, `the REC clunk is at frame ${clunkFrame}, the cut at ${cutFrame}`);
+    note(stage, `zoom motor ${(10 * Math.log10(moving / Math.max(still, 1e-30))).toFixed(0)} dB louder while the zoom moves · break: cut frame ${cutFrame}, clunk frame ${clunkFrame}`);
   } catch (err) {
     fail(stage, String(err));
   }
 }
 
 /* ================================================================== *
- * 12. The CPU backend agrees with the GPU
+ * 12. The two backends agree
  * ================================================================== */
 
 {
   const stage = 'cpu';
   try {
-    const W = 160;
-    const H = 110;
-    const req = { source: { kind: 'bars' }, width: W, height: H, srcWidth: 320, srcHeight: 240, frames: [4] };
-    const clean = { 'grain.enabled': false, 'engine.gate': false };
-    const g1 = (await probe(lab, { ...req, backend: 'gpu', settings: clean })).frames[0];
-    const c1 = (await probe(lab, { ...req, backend: 'cpu', settings: clean })).frames[0];
-    const perPixel = meanAbsDiff(g1, c1);
-    if (perPixel > 1.5) fail(stage, `without grain the two backends differ by ${perPixel.toFixed(2)}/px`);
-    const flagship = (await lab.evaluate(() => window.__filmbox.presets?.['super8-1974'])) ?? {};
-    const g2 = await probe(lab, { ...req, backend: 'gpu', settings: flagship });
-    const c2 = await probe(lab, { ...req, backend: 'cpu', settings: flagship });
-    const meanGap = Math.max(...g2.frames[0].mean.map((v, i) => Math.abs(v - c2.frames[0].mean[i])));
-    if (meanGap > 3) fail(stage, `with the flagship look the backends' means differ by ${meanGap.toFixed(1)}`);
-    if (c2.backend !== 'cpu') fail(stage, 'asked for the CPU backend and did not get it');
-    note(stage, `${perPixel.toFixed(2)}/px apart without grain · flagship means within ${meanGap.toFixed(1)} · CPU ${c2.ms.toFixed(0)} ms vs GPU ${g2.ms.toFixed(0)} ms`);
+    const flagship = await lab.evaluate(() => window.__camai.presets['palmcorder-2002']);
+    const req = { source: { kind: 'scene' }, ...NATIVE, frames: [0, 1, 2] };
+    const g = await probe(lab, { ...req, backend: 'gpu', settings: { ...flagship, ...DV } });
+    const c = await probe(lab, { ...req, backend: 'cpu', settings: { ...flagship, ...DV } });
+    if (c.backend !== 'cpu') fail(stage, 'asked for the CPU backend and did not get it');
+    const d = meanAbsDiff(g.frames[2], c.frames[2]);
+    if (d > 0.5) fail(stage, `with the flagship the backends differ by ${d.toFixed(3)}/px`);
+    note(stage, `flagship, third frame: GPU and CPU ${d.toFixed(3)}/px apart · CPU ${(c.ms / 3).toFixed(0)} ms/frame vs GPU ${(g.ms / 3).toFixed(0)}`);
   } catch (err) {
     fail(stage, String(err));
   }
@@ -1392,15 +1484,15 @@ const at = (profile, ev) => profile.reduce((b, p) => (Math.abs(p.ev - ev) < Math
     await dropStill(page, BARS);
     await settledStats(page);
     await page.click('.backend-toggle button[data-backend="cpu"]');
-    const s = await settledStats(page, { timeout: 30000 });
+    const s = await settledStats(page, { timeout: 60000 });
     const ctx = await page.evaluate(() => {
-      const c = document.querySelector('.stage canvas');
-      return c.getContext('2d') ? '2d' : 'webgl';
+      const cv = document.querySelector('.stage canvas');
+      return cv.getContext('2d') ? '2d' : 'webgl';
     });
     if (ctx !== '2d') fail(stage, 'switching to CPU did not replace the WebGL canvas');
     if (s.lit < 0.3) fail(stage, `the CPU backend drew a dark frame through the UI (${(s.lit * 100).toFixed(1)}% lit)`);
     note(stage, `header toggle → CPU: ${(s.lit * 100).toFixed(1)}% lit`);
-    await page.evaluate(() => localStorage.removeItem('filmbox.backend'));
+    await page.evaluate(() => localStorage.removeItem('camai.backend'));
   } catch (err) {
     fail(stage, `toggle: ${err}`);
   }
@@ -1408,76 +1500,52 @@ const at = (profile, ev) => profile.reduce((b, p) => (Math.abs(p.ev - ev) < Math
 }
 
 /* ================================================================== *
- * 13. Engine masters bypass, and advanced parameters are shown
+ * 13. Engine masters bypass exactly their own tab
  * ================================================================== */
 
 {
   const stage = 'masters';
+  try {
+    const flagship = await lab.evaluate(() => window.__camai.presets['found-tape-2006']);
+    const req = { backend: 'gpu', source: { kind: 'scene' }, ...NATIVE, frames: [3] };
+    const all = (await probe(lab, { ...req, settings: { ...flagship, ...DV } })).frames[0];
+    const keysOf = (tab) => Object.keys(flagship).filter((k) => k.endsWith('.enabled')).filter((k) => {
+      const camera = ['operator', 'lens', 'exposure', 'sensor', 'focus', 'wb', 'eis', 'dzoom', 'tone', 'detail', 'battery', 'night', 'fx'];
+      const tape = ['interlace', 'chroma', 'codec', 'tape', 'breaks'];
+      const display = ['osd', 'date', 'capture', 'deint', 'upload'];
+      const g = k.split('.')[0];
+      return (tab === 'camera' ? camera : tab === 'tape' ? tape : display).includes(g);
+    });
+    const parts = [];
+    for (const tab of ['camera', 'tape', 'display']) {
+      const viaMaster = (await probe(lab, { ...req, settings: { ...flagship, ...DV, [`engine.${tab}`]: false } })).frames[0];
+      const byHand = Object.fromEntries(keysOf(tab).map((k) => [k, false]));
+      const manual = (await probe(lab, { ...req, settings: { ...flagship, ...DV, ...byHand } })).frames[0];
+      const same = meanAbsDiff(viaMaster, manual);
+      const changed = meanAbsDiff(all, viaMaster);
+      if (same > 0) fail(stage, `the ${tab} master is not the same as switching its sections off by hand (${same.toFixed(3)}/px)`);
+      if (changed < 1) fail(stage, `switching the ${tab} engine off barely changed the picture (${changed.toFixed(2)}/px)`);
+      parts.push(`${tab} ${changed.toFixed(1)}`);
+    }
+    note(stage, `each master equals its tab's switches by hand · bypass changes the picture ${parts.join(' · ')} /px`);
+  } catch (err) {
+    fail(stage, String(err));
+  }
+  // Through the interface: the switch on the tab, and the tab marked.
   const { page } = await openPage();
   try {
     await dropStill(page, BARS);
     await settledStats(page);
-    const r = await page.evaluate(async () => {
+    const struck = await page.evaluate(async () => {
       const sleep = (ms) => new Promise((x) => setTimeout(x, ms));
-      const sect = (t) => [...document.querySelectorAll('.group')].find((x) => x.querySelector('.group-title')?.textContent === t);
-      const s = sect('Characteristic Curve');
-      if (s && !s.classList.contains('open')) s.querySelector('.group-toggle').click();
-      await sleep(300);
-      const advanced = [...document.querySelectorAll('.param-label')].some((l) => l.textContent === 'Layer crossover');
-      const tab = (name) => [...document.querySelectorAll('.tabs .tab')].find((t) => t.textContent.trim().startsWith(name));
-      const app = document.querySelector('.stage canvas');
-      const p = document.createElement('canvas');
-      p.width = 96;
-      p.height = 66;
-      const g = p.getContext('2d', { willReadFrequently: true });
-      const grab = () => {
-        g.drawImage(app, 0, 0, 96, 66);
-        return Array.from(g.getImageData(0, 0, 96, 66).data);
-      };
-      const settle = async () => {
-        let last = grab();
-        for (let k = 0; k < 30; k++) {
-          await sleep(200);
-          const now = grab();
-          let d = 0;
-          let mean = 0;
-          for (let i = 0; i < now.length; i += 4) {
-            d += Math.abs(now[i + 1] - last[i + 1]);
-            mean += now[i + 1];
-          }
-          if (d / (now.length / 4) < 6 && mean / (now.length / 4) > 10) return now;
-          last = now;
-        }
-        return last;
-      };
-      const diff = (a, b) => {
-        let d = 0;
-        for (let i = 0; i < a.length; i += 4) d += Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]);
-        return d / (a.length / 4) / 3;
-      };
-      const all = await settle();
-      const out = { advanced, struck: false, d: {} };
-      for (const name of ['Stock', 'Lens', 'Gate']) {
-        tab(name).querySelector('input').click();
-        const off = await settle();
-        if (name === 'Stock') out.struck = tab('Stock').classList.contains('bypassed');
-        out.d[name] = diff(all, off);
-        tab(name).querySelector('input').click();
-        await settle();
-      }
-      return out;
+      const tab = [...document.querySelectorAll('.tabs .tab')].find((t) => t.textContent.trim().startsWith('Camera'));
+      tab.querySelector('input').click();
+      await sleep(400);
+      const s = tab.classList.contains('bypassed');
+      tab.querySelector('input').click();
+      return s;
     });
-    if (!r.advanced) fail(stage, 'fine-detail parameters are hidden on a fresh profile — they should be shown by default');
-    if (!r.struck) fail(stage, 'a bypassed engine is not marked as such on its tab');
-    // The lens on bars is mostly softness and vignetting, so its bypass is the
-    // smallest change of the three; the bars are a poor lens test and a fine
-    // stock or gate test. A paused still is deterministic — the same film frame
-    // every time — so even a small difference here is real, not noise.
-    const floor = { Stock: 4, Lens: 1, Gate: 4 };
-    for (const [name, d] of Object.entries(r.d)) {
-      if (d < floor[name]) fail(stage, `switching the ${name} engine off barely changed the picture (${d.toFixed(1)}/px)`);
-    }
-    note(stage, `bypassing changes the picture by ${Object.entries(r.d).map(([k, v]) => `${k} ${v.toFixed(1)}`).join(' · ')} /px · advanced shown`);
+    if (!struck) fail(stage, 'a bypassed engine is not marked as such on its tab');
   } catch (err) {
     fail(stage, String(err));
   }
@@ -1485,19 +1553,14 @@ const at = (profile, ev) => profile.reduce((b, p) => (Math.abs(p.ev - ev) < Math
 }
 
 /* ================================================================== *
- * 14. A deterministic export through the interface
- *
- * The path a user takes: load a clip, choose a PNG sequence, Render. Each
- * output frame has to seek to the moment its film frame was exposed, the
- * file has to be the shape asked for, every frame has to be there, and the
- * processed soundtrack has to come with it.
+ * 14. Exports: through the interface, and a DV file that is DV
  * ================================================================== */
 
 {
   const stage = 'export';
   const { page } = await openPage();
   try {
-    await page.selectOption('.topbar-actions select', 'news16-1974');
+    await page.selectOption('.topbar-actions select', 'prosumer-2003');
     const dur = await page.evaluate(async () => {
       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       const blob = await (await fetch('/fixture.webm')).blob();
@@ -1512,8 +1575,10 @@ const at = (profile, ev) => profile.reduce((b, p) => (Math.abs(p.ev - ev) < Math
       throw new Error('video never became ready');
     });
     await page.selectOption('.export select', 'pngseq');
+    const res = page.locator('.export select').nth(1);
+    await res.selectOption('480p').catch(() => undefined);
     const [download] = await Promise.all([
-      page.waitForEvent('download', { timeout: 300000 }),
+      page.waitForEvent('download', { timeout: 900000 }),
       page.click('.export .actions button.primary'),
     ]);
     const path = await download.path();
@@ -1525,16 +1590,11 @@ const at = (profile, ev) => profile.reduce((b, p) => (Math.abs(p.ev - ev) < Math
       (png[20] << 24) | (png[21] << 16) | (png[22] << 8) | png[23],
     ];
     const [w, h] = size(files[frames[0]]);
-    // 16 mm news film at 24 fps on 29.97 fps television.
     const expected = Math.round(dur * (30000 / 1001));
     if (Math.abs(frames.length - expected) > 1) fail(stage, `${frames.length} frames for ${dur.toFixed(2)} s at 29.97 fps, expected ${expected}`);
-    if (Math.abs(w / h - 4 / 3) > 0.01) fail(stage, `the file is ${w}×${h}, not the 1.33 frame the preset asks for`);
-    // The fixture has no audio track: the soundtrack is the film's own — the
-    // projector and the track's noise — which a silent clip still has.
-    if (!files['audio.wav'] || files['audio.wav'].length < 10000) fail(stage, 'no soundtrack in the export');
-    if (!files['settings.filmbox.json']) fail(stage, 'the export does not carry its settings');
-    // The clip moves, so consecutive frames must differ — unless the export
-    // never sought and rendered the same film frame throughout.
+    if (Math.abs(w / h - 4 / 3) > 0.01) fail(stage, `the file is ${w}×${h}, not 4:3`);
+    if (!files['audio.wav'] || files['audio.wav'].length < 10000) fail(stage, 'no soundtrack in the export — the camera always has one');
+    if (!files['settings.camai.json']) fail(stage, 'the export does not carry its settings');
     let same = 0;
     for (let i = 1; i < frames.length; i++) {
       const a = files[frames[i - 1]];
@@ -1547,6 +1607,84 @@ const at = (profile, ev) => profile.reduce((b, p) => (Math.abs(p.ev - ev) < Math
     fail(stage, String(err));
   }
   await page.close();
+
+  // A DV file, encoded with exactly the arguments the desktop app uses.
+  const ff = require('ffmpeg-static');
+  const { buildArgs } = require(join(here, '..', 'electron', 'encode.cjs'));
+  const dir = await mkdtemp(join(tmpdir(), 'camai-dvx-'));
+  try {
+    for (const system of ['ntsc', 'pal']) {
+      const H = system === 'pal' ? 576 : 480;
+      const frames = await lab.evaluate(async ({ H, system }) => {
+        const r = await window.__camai.renderProbe({
+          backend: 'gpu',
+          settings: { 'format.system': system, 'codec.enabled': false, 'chroma.enabled': false, 'framing.overscan': true, 'framing.scaler': 'nearest', 'framing.dither': 0 },
+          source: { kind: 'bar', pxPerSec: 300 },
+          width: 720,
+          height: H,
+          frames: [0, 1, 2, 3, 4, 5],
+          pixels: true,
+        });
+        const c = document.createElement('canvas');
+        c.width = 720;
+        c.height = H;
+        const g = c.getContext('2d');
+        const out = [];
+        for (const f of r.frames) {
+          const img = g.createImageData(720, H);
+          for (let i = 0; i < 720 * H; i++) {
+            img.data[i * 4] = f.rgb[i * 3];
+            img.data[i * 4 + 1] = f.rgb[i * 3 + 1];
+            img.data[i * 4 + 2] = f.rgb[i * 3 + 2];
+            img.data[i * 4 + 3] = 255;
+          }
+          g.putImageData(img, 0, 0);
+          out.push(c.toDataURL('image/png').split(',')[1]);
+        }
+        return out;
+      }, { H, system });
+      const audio = await renderAudio(lab, { settings: { 'mech.enabled': true }, seconds: 0.3, programme: 'silence' });
+      const pcm = Buffer.alloc(audio.left.length * 4);
+      for (let i = 0; i < audio.left.length; i++) {
+        pcm.writeInt16LE(Math.round(Math.max(-1, Math.min(1, audio.left[i])) * 32767), i * 4);
+        pcm.writeInt16LE(Math.round(Math.max(-1, Math.min(1, audio.right[i])) * 32767), i * 4 + 2);
+      }
+      const wav = Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WAVEfmt '), Buffer.from([16, 0, 0, 0, 1, 0, 2, 0]), Buffer.alloc(4), Buffer.alloc(4), Buffer.from([4, 0, 16, 0]), Buffer.from('data'), Buffer.alloc(4), pcm]);
+      wav.writeUInt32LE(wav.length - 8, 4);
+      wav.writeUInt32LE(48000, 24);
+      wav.writeUInt32LE(48000 * 4, 28);
+      wav.writeUInt32LE(pcm.length, 40);
+      const audioPath = join(dir, `a-${system}.wav`);
+      await writeFile(audioPath, wav);
+      const out = join(dir, `out-${system}.dv`);
+      const args = buildArgs({ format: 'dv', fps: system === 'pal' ? 25 : 29.97, rate: system === 'pal' ? '25' : '30000/1001', dvSystem: system, dvAspect: '4:3', outputPath: out, audioPath });
+      await new Promise((resolve, reject) => {
+        const child = spawn(ff, args, { stdio: ['pipe', 'ignore', 'pipe'] });
+        let err = '';
+        child.stderr.on('data', (d) => (err += d));
+        child.on('close', (code) => (code === 0 ? resolve() : reject(new Error(err.slice(-600)))));
+        for (const b64 of frames) child.stdin.write(Buffer.from(b64, 'base64'));
+        child.stdin.end();
+      });
+      let info = '';
+      try {
+        execFileSync(ff, ['-hide_banner', '-i', out], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+      } catch (e) {
+        info = String(e.stderr ?? '');
+      }
+      const video = info.split('\n').find((l) => /Video:/.test(l)) ?? '';
+      const aud = info.split('\n').find((l) => /Audio:/.test(l)) ?? '';
+      if (!/dvvideo/.test(video)) fail(stage, `${system}: the DV export is not dvvideo (${video.trim()})`);
+      if (!video.includes(`720x${H}`)) fail(stage, `${system}: the DV export is not 720×${H} (${video.trim()})`);
+      if (!/bottom first/.test(video)) fail(stage, `${system}: the DV export is not bottom field first (${video.trim()})`);
+      if (!/pcm_s16le/.test(aud) || !/48000/.test(aud)) fail(stage, `${system}: the DV export's audio is not 48 kHz PCM (${aud.trim()})`);
+      note(stage, `DV ${system}: ${video.replace(/.*Video: /, '').split(',').slice(0, 3).join(',').trim()} · ${aud.replace(/.*Audio: /, '').split(',').slice(0, 2).join(',').trim()}`);
+    }
+  } catch (err) {
+    fail(stage, `DV: ${err}`);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 }
 
 for (const n of main.noise) fail('main page', n);
@@ -1554,13 +1692,14 @@ for (const n of main.noise) fail('main page', n);
 await browser.close();
 server.close();
 
+const minutes = ((Date.now() - t0) / 60000).toFixed(1);
 if (failures.length) {
-  console.error('SMOKE TEST FAILED');
+  console.error(`SMOKE TEST FAILED (${minutes} min)`);
   for (const f of failures) console.error('  •', f);
   console.error('\nwhat did pass:');
   for (const r of report) console.error(r);
   process.exit(1);
 }
 
-console.log('smoke test passed');
+console.log(`smoke test passed (${minutes} min)`);
 for (const r of report) console.log(r);

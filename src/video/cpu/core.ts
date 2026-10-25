@@ -126,6 +126,23 @@ export function srgbToLinear(c: number): number {
   return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
 }
 
+const LUT_N = 4096;
+const SRGB_LUT = new Float64Array(LUT_N + 2);
+for (let i = 0; i <= LUT_N + 1; i++) SRGB_LUT[i] = srgbToLinear(Math.min(i / LUT_N, 1.0001));
+
+/**
+ * sRGB decode by table, interpolated: within 1e-6 of the formula across
+ * 0..1, and several times faster where it runs a dozen times a pixel.
+ */
+export function srgbToLinearFast(c: number): number {
+  if (c <= 0) return c / 12.92;
+  if (c >= 1) return srgbToLinear(c);
+  const x = c * LUT_N;
+  const i = x | 0;
+  const f = x - i;
+  return SRGB_LUT[i] + (SRGB_LUT[i + 1] - SRGB_LUT[i]) * f;
+}
+
 export function linearToSrgb(c: number): number {
   return c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1 / 2.4) - 0.055;
 }
