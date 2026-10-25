@@ -52,6 +52,9 @@
     "appId": "app.filmbox.desktop",
     "productName": "FILMBOX",
     "copyright": "Copyright © 2026 FILMBOX contributors",
+    "extraMetadata": {
+      "description": "FILMBOX film emulator"
+    },
     "directories": {
       "output": "release",
       "buildResources": "build"
@@ -113,7 +116,9 @@
       "target": [
         "AppImage",
         "deb"
-      ]
+      ],
+      "synopsis": "Film stock and format emulation for picture and sound",
+      "description": "Film stock and format emulation for picture and sound: Super 8 to 65 mm, characteristic curves, grain fixed to the film, halation, printing, dye fading, gate weave, dirt, splices, pulldown, magnetic and optical soundtracks and the projector in the room."
     }
   },
   "author": {

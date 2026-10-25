@@ -257,6 +257,17 @@ npm run shots          render every preset over the test scene
 npm run dist:win       package for Windows
 ```
 
+Packaging for Windows from Linux needs Wine with 32-bit support (the NSIS
+step runs the installer it has just built), and `ffmpeg-static` holding the
+Windows binary instead of the Linux one, since the whole package is bundled:
+
+```
+mv node_modules/ffmpeg-static/ffmpeg /tmp/ffmpeg-linux
+npm_config_platform=win32 npm_config_arch=x64 node node_modules/ffmpeg-static/install.js
+npm run dist:win
+rm node_modules/ffmpeg-static/ffmpeg.exe*; mv /tmp/ffmpeg-linux node_modules/ffmpeg-static/ffmpeg
+```
+
 Layout:
 
 ```
@@ -280,9 +291,15 @@ src/testing/probe.ts     the measurement hook the smoke test uses
 
 - Stock figures are approximations from published data sheets and known
   behaviour, not measurements of film.
-- The Windows installer is built and verified by the Windows workflow, not in
-  this repository's development container; there, an unpacked Windows build and
-  a Linux headless render under xvfb were checked.
+- The 1.0.0 Windows installer and portable exe were built on Linux under Wine,
+  not on Windows. Under Wine the installer was checked to install silently per
+  user, create its shortcuts and uninstall entry, and uninstall cleanly; the
+  exe carries its icon and version resource, its main process runs, and the
+  bundled ffmpeg.exe has the H.264, HEVC, ProRes and AAC encoders. Chromium's
+  renderer does not start under Wine, so no render was made with the Windows
+  build; renders were checked with the Linux build under xvfb. They are
+  unsigned, so SmartScreen will warn on first run. The Windows workflow builds
+  the same targets on a real Windows runner.
 - Magnetic print-through is a true pre-echo only in exports. The live preview
   cannot look a reel's turn into the future, so it plays the echo after.
 - In the live preview the source is sampled when each film frame begins, from
