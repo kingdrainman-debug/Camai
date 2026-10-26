@@ -616,11 +616,15 @@ const UI_HELPERS = `
       const levels = [];
       for (const t of [0, 2, 4]) {
         ui.setInput(scrub, t);
+        // A software-rendered frame can take longer than a poll, so one
+        // unchanged reading is not settled: wait for four in a row.
+        await ui.sleep(1500);
         let last = -1;
-        for (let k = 0; k < 60; k++) {
-          await ui.sleep(250);
+        let calm = 0;
+        for (let k = 0; k < 80 && calm < 4; k++) {
+          await ui.sleep(400);
           const m = mean();
-          if (Math.abs(m - last) < 1.5) break;
+          calm = Math.abs(m - last) < 1 ? calm + 1 : 0;
           last = m;
         }
         levels.push(mean());
