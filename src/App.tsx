@@ -1093,6 +1093,7 @@ export default function App() {
           width: outW,
           height: outH,
           audio: wav ? await wav.arrayBuffer() : null,
+          frames: total,
         });
 
         for (let i = 0; i < total; i++) {

@@ -19,6 +19,8 @@ export interface EncodeStartOptions {
   width?: number;
   height?: number;
   audio?: ArrayBuffer | null;
+  /** How many frames will be sent; DV pads its sound to exactly this length. */
+  frames?: number;
 }
 
 export interface HeadlessJob {

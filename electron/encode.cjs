@@ -6,6 +6,13 @@
  * genuinely DV: dvvideo, the right raster, bottom field first.
  */
 
+/** A rate such as "30000/1001" as a number. */
+function rateOf(rate) {
+  if (!rate) return 0;
+  const [n, d] = String(rate).split('/').map(Number);
+  return d ? n / d : n;
+}
+
 function buildArgs(opts) {
   const { format, fps, rate, quality, outputPath, audioPath, width, height } = opts;
   const args = ['-y', '-f', 'image2pipe', '-framerate', rate || String(fps), '-i', 'pipe:0'];
@@ -20,7 +27,18 @@ function buildArgs(opts) {
         '-c:v', 'dvvideo', '-flags', '+ilme+ildct', '-top', '0',
         '-aspect', opts.dvAspect || '4:3',
       );
-      if (audioPath) args.push('-af', 'apad', '-c:a', 'pcm_s16le', '-ar', '48000', '-ac', '2');
+      // Every DV frame carries its own audio, so the muxer needs a frame's
+      // worth for each: pad or trim the sound to exactly the picture's
+      // length (an unbounded pad floods the muxer before slow piped frames
+      // arrive; sound that runs on leaves the last frames without theirs).
+      if (audioPath) {
+        if (opts.frames > 0) {
+          const dur = (opts.frames / (rateOf(rate) || fps)).toFixed(6);
+          args.push('-af', `apad=whole_dur=${dur},atrim=end=${dur}`);
+        }
+        args.push('-c:a', 'pcm_s16le', '-ar', '48000', '-ac', '2');
+      }
+      if (opts.frames > 0) args.push('-frames:v', String(opts.frames));
       args.push('-f', 'dv');
       break;
     case 'prores':
@@ -45,7 +63,7 @@ function buildArgs(opts) {
       if (audioPath) args.push('-c:a', 'aac', '-b:a', '256k');
       break;
   }
-  if (audioPath && format !== 'gif') args.push('-shortest');
+  if (audioPath && format !== 'gif' && !(format === 'dv' && opts.frames > 0)) args.push('-shortest');
   args.push(outputPath);
   return args;
 }

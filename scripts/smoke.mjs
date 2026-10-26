@@ -1747,7 +1747,7 @@ const lab = main.page;
       const audioPath = join(dir, `a-${system}.wav`);
       await writeFile(audioPath, wav);
       const out = join(dir, `out-${system}.dv`);
-      const args = buildArgs({ format: 'dv', fps: system === 'pal' ? 25 : 29.97, rate: system === 'pal' ? '25' : '30000/1001', dvSystem: system, dvAspect: '4:3', outputPath: out, audioPath });
+      const args = buildArgs({ format: 'dv', fps: system === 'pal' ? 25 : 29.97, rate: system === 'pal' ? '25' : '30000/1001', dvSystem: system, dvAspect: '4:3', outputPath: out, audioPath, frames: frames.length });
       await new Promise((resolve, reject) => {
         const child = spawn(ff, args, { stdio: ['pipe', 'ignore', 'pipe'] });
         let err = '';
