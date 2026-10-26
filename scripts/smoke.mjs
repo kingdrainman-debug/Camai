@@ -629,13 +629,14 @@ const UI_HELPERS = `
         }
         levels.push(mean());
       }
-      return { diamonds, levels };
+      const exposureMode = ui.row(await ui.section('Exposure'), 'Mode').querySelector('select').value;
+      return { diamonds, levels, scrubMax: scrub.max, exposureMode, duration: document.querySelector('video')?.duration ?? null };
     });
     if (r.diamonds !== 2) fail(stage, `expected 2 keyframe markers, drew ${r.diamonds}`);
     const [a, mid, b] = r.levels;
     if (a - b < 30) fail(stage, `two stops less exposure barely changed the render (${a.toFixed(1)} → ${b.toFixed(1)})`);
     if (mid < Math.min(a, b) + 3 || mid > Math.max(a, b) - 3) {
-      fail(stage, `midpoint ${mid.toFixed(1)} is not between ${a.toFixed(1)} and ${b.toFixed(1)} — stepping, not easing`);
+      fail(stage, `midpoint ${mid.toFixed(1)} is not between ${a.toFixed(1)} and ${b.toFixed(1)} — stepping, not easing (scrub max ${r.scrubMax}, exposure ${r.exposureMode})`);
     }
     note(stage, `${r.diamonds} markers · brightness ${r.levels.map((v) => v.toFixed(0)).join(' → ')}`);
   } catch (err) {
