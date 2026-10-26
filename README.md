@@ -147,10 +147,41 @@ is documented, then runs `scripts/smoke.mjs`: the built app in a real browser,
 driven through its own interface, plus a probe that renders synthetic sources
 — drawn at the exact moment each field asks for — through the real renderers
 and **measures the camcorder from pixels and samples**. From the last run in
-development:
+development (headless Chromium, software WebGL, 15.5 minutes):
 
 ```
-SMOKE_RESULTS
+smoke test passed
+mount      app mounted · all 19 programs linked on WebGL2
+picture    83.1% lit · contrast 0.99 · flat-bar texture p90 2
+video      element 184 · picture 82.7% lit
+audio      worklet ok · silent clip still has the camera (rms 3.0e-1) · 12-bit −27 dB above 16 kHz · AGC lifts the room +9.5 dB
+keyframes  2 markers · brightness 133 → 93 → 64
+framing    forced 16:9 → 1.778 · 4:3 camera → 1.333 · 16:9 camera → 1.778
+purity     gpu: everything off → source within 0.36/px (the DV raster's resampling)
+purity     cpu: everything off → source within 0.36/px (the DV raster's resampling)
+purity     frame 9 identical whether rendered after 3, 4, 5 or on its own
+packaged   file:// mounted 44908 chars · 99.8% lit · worklet ok
+sections   23/23 sections measurably reach the render
+guide      shown, closes, reopens, 10 cameras, remembered, F1 · ⓘ 235 / 739 chars
+fields     top field is 9.8 px later (expect 9.8): bottom first · top-first -9.8 · progressive 0.00
+deinterlaceweave combs on motion 8.71/px vs still 0.00 · bob 0.00 · discard keeps 50% of line-pair detail
+blocking   boundary/interior 1.38 with the codec, 1.00 without · at 1080p the error steps 1.15× on the scaled block grid, 1.02× on an unscaled one
+budget     noise in a third of the frame: right third 52.8 → 52.2 dB, mean quantiser 15.0 → 7.5
+dvvideo    emulation/FFmpeg, codec error only: scene 54.4/55.2 dB blk 1.11/1.19 · zone 37.7/38.0 dB blk 1.20/1.30 · noise 44.0/46.2 dB blk 0.82/0.88
+chroma     red line: 4:1:1 → 4 px wide, 1 rows · 4:2:0 → 2 px wide, 4 rows
+detail     edge overshoot +30.0 / −17.0 (off: +0.0) · noise 5.09 → 1.38 with coring
+sensors    CCD point light → column +92.0 bottom, +92.0 top; CMOS +0.0 · pan lean: CCD 0.0 px, CMOS -7.9 px
+knee       slope 34 → 22 → 0.0 /stop: knee and wall · near clip, chroma excursion 11 single-chip vs 0 three-chip
+overlays   before the codec: bleed 1.89 ring 0.62 · after decode: bleed 0.00 ring 0.00 · composite capture keeps 61% of the edges
+clocks     2 breaks in 10 s: date jumps ≥ 1 min each, counter continuous, first cut at frame 120 (Δ 8.4 vs median 0.7)
+dropouts   265 lost macroblocks, each exactly the previous frame (max diff 0) · 3 whole-frame dropouts muted the sound at the same frames, 0 missed
+avlink     zoom motor 53 dB louder while the zoom moves · break: cut frame 120, clunk frame 120
+cpu        flagship, third frame: GPU and CPU 0.025/px apart · CPU 2436 ms/frame vs GPU 2789
+cpu        header toggle → CPU: 83.4% lit
+masters    each master equals its tab's switches by hand · bypass changes the picture camera 32.9 · tape 0.7 · display 3.8 /px
+export     59 frames of 640×480 for 2.00 s at 29.97 · audio 375 KiB · settings embedded
+export     DV ntsc: dvvideo, yuv411p, 720x480 [SAR 8:9 DAR 4:3] · pcm_s16le, 48000 Hz
+export     DV pal: dvvideo, yuv420p, 720x576 [SAR 16:15 DAR 4:3] · pcm_s16le, 48000 Hz
 ```
 
 The codec is also compared against **FFmpeg's own `dvvideo` encoder**, on the
@@ -159,17 +190,16 @@ reference). The emulation's rate control is an approximation — the bit cost
 of DV's variable-length code is modelled, not tabulated — calibrated against
 the real encoder. In development (525/60):
 
-| source | PSNR, emulation | PSNR, FFmpeg | blocking ratio, emulation | blocking ratio, FFmpeg | HF kept, emulation | HF kept, FFmpeg |
-|---|---|---|---|---|---|---|
-| drawn scene | 54.4 dB | 55.2 dB | 1.11 | 1.20 | 0.98 | 0.98 |
-| zone plate | 37.7 dB | 38.0 dB | 1.19 | 1.30 | 1.01 | 0.99 |
-| noise patch | 44.6 dB | 47.4 dB | 0.72 | 0.73 | 0.93 | 0.93 |
-| fine texture | 32.2 dB | 31.8 dB | 0.94 | 0.77 | 0.90 | 0.76 |
+| source | PSNR, emulation | PSNR, FFmpeg | blocking ratio, emulation | blocking ratio, FFmpeg |
+|---|---|---|---|---|
+| drawn scene | 54.4 dB | 55.2 dB | 1.11 | 1.19 |
+| zone plate | 37.7 dB | 38.0 dB | 1.20 | 1.30 |
+| gradient with a noise patch | 44.0 dB | 46.2 dB | 0.82 | 0.88 |
 
-So: close on smooth and structured pictures; about 3 dB worse than the real
-encoder on fine noise; and on dense fine texture it keeps more of the highest
-frequencies than DV does. The smoke test fails if any of the first three drift
-more than 4 dB or 0.3 in blocking ratio from FFmpeg.
+So: within a dB of the real encoder on smooth and structured pictures, and
+about 2 dB worse on fine noise, where the modelled bit costs are least exact.
+Its blocks are a little weaker than DV's throughout. The smoke test fails if
+any of these drift more than 4 dB or 0.3 in blocking ratio from FFmpeg.
 
 ---
 
