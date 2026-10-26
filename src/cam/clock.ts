@@ -327,7 +327,8 @@ export function frameState(input: ClockInput): FrameState {
   const at = shots.atOutput(outT);
   let garbage = false;
   if (bool(s, 'breaks.enabled') && !bool(s, 'breaks.seamless') && at.index > 0) {
-    garbage = Math.floor(at.shot.out0 * r.dv + 1e-6) === n;
+    // The first frame wholly inside the new shot.
+    garbage = Math.ceil(at.shot.out0 * r.dv - 1e-6) === n;
   }
   let battery = 100;
   let dead = false;

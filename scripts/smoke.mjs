@@ -818,7 +818,7 @@ const UI_HELPERS = `
     }
     const shots = new events.Shots(1337, { enabled: true, rate: 20, skip: 0.6, gap: 12, seamless: false });
     shots.ensure(600);
-    const breakFrame = shots.list.length > 1 ? Math.floor(shots.list[1].out0 * fps + 1e-6) : 24;
+    const breakFrame = shots.list.length > 1 ? Math.ceil(shots.list[1].out0 * fps - 1e-6) : 24;
     const frameFor = { tape: clogFrame, breaks: breakFrame };
     const req = { backend: 'gpu', source: { kind: 'scene' }, ...NATIVE };
     const refs = new Map();
@@ -1498,7 +1498,7 @@ const lab = main.page;
       }
     }
     const fps = 30000 / 1001;
-    const cutFrame = Math.floor(cut.out0 * fps + 1e-6);
+    const cutFrame = Math.ceil(cut.out0 * fps - 1e-6);
     const clunkFrame = Math.floor((peakAt / b.sampleRate) * fps);
     if (Math.abs(clunkFrame - cutFrame) > 2) fail(stage, `the REC clunk is at frame ${clunkFrame}, the cut at ${cutFrame}`);
     note(stage, `zoom motor ${(10 * Math.log10(moving / Math.max(still, 1e-30))).toFixed(0)} dB louder while the zoom moves · break: cut frame ${cutFrame}, clunk frame ${clunkFrame}`);
