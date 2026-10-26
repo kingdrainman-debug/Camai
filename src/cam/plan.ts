@@ -16,6 +16,7 @@ import { Automatics, Exposure } from './automatics';
 import { ACTIVE_W, FrameState, frameAspect, pixelAspect, shutterRepeat } from './clock';
 import { OsdImage, drawDate, drawDisplay, overlayPaths } from './osd';
 import { meterView } from '../video/sources';
+import { Timeline, isAnimated, valueAt } from '../core/timeline';
 import { ihash, operatorAt } from '../../public/worklets/camai-events.js';
 
 /** Rows of the view table: a rolling shutter samples the camera's motion at this many heights. */
@@ -214,8 +215,28 @@ export interface PlanInput {
   thumbOf: (tag: number) => Float32Array;
   auto: Automatics;
   zoomMoving?: boolean;
+  /**
+   * Where the camera is deliberately pointed at a source time — pan, tilt
+   * and roll from the keyframes — so that a keyframed pan moves within a
+   * field's exposure and down a rolling shutter's readout. Without it the
+   * frame's settings hold still for the whole frame.
+   */
+  aimAt?: AimAt;
   outW: number;
   outH: number;
+}
+
+export type AimAt = (t: number) => [number, number, number];
+
+/** An aimAt for a timeline, or undefined when pan, tilt and roll are not keyframed. */
+export function aimFromTimeline(base: Settings, timeline: Timeline): AimAt | undefined {
+  const keys = ['operator.pan', 'operator.tilt', 'operator.roll'] as const;
+  if (!keys.some((k) => isAnimated(timeline, k))) return undefined;
+  return (t) =>
+    keys.map((k) => {
+      const v = isAnimated(timeline, k) ? valueAt(k, timeline[k], t) : undefined;
+      return Number(v ?? base[k] ?? 0);
+    }) as [number, number, number];
 }
 
 export function planFrame(inp: PlanInput): FramePlan {
@@ -290,10 +311,12 @@ export function planFrame(inp: PlanInput): FramePlan {
     whips: num(s, 'operator.whips'),
     whipAngle: num(s, 'operator.whipAngle'),
   };
+  const pointed = inp.aimAt;
   const aim = (t: number): [number, number, number] => {
     if (!opOn) return [0, 0, 0];
     const a = operatorAt(t, seed, o);
-    return [a[0] + num(s, 'operator.pan'), a[1] + num(s, 'operator.tilt'), a[2] + num(s, 'operator.roll')];
+    const p = pointed ? pointed(t) : [num(s, 'operator.pan'), num(s, 'operator.tilt'), num(s, 'operator.roll')];
+    return [a[0] + p[0], a[1] + p[1], a[2] + p[2]];
   };
 
   const rep = shutterRepeat(s, sys);

@@ -24,6 +24,7 @@ import { renderProcessedAudio } from '../export/offlineAudio';
 import { zoomVelocityAt } from '../audio/engine';
 import { PRESETS } from '../core/presets';
 import { frameAspect, frameState, neededTaps, rates } from '../cam/clock';
+import { aimFromTimeline } from '../cam/plan';
 import { BackendChoice, Renderer, createRenderer } from '../video/backend';
 
 export type ProbeSource =
@@ -38,7 +39,7 @@ export type ProbeSource =
   | { kind: 'redline'; width?: number }
   | { kind: 'redtext' }
   | { kind: 'point'; size?: number; level?: number }
-  | { kind: 'noise'; amount: number }
+  | { kind: 'noise'; amount: number; ripple?: number }
   | { kind: 'verticals'; spacing?: number }
   | { kind: 'bars' }
   | { kind: 'scene' }
@@ -133,7 +134,7 @@ function drawSource(ctx: CanvasRenderingContext2D, w: number, h: number, src: Pr
           // A smooth gradient, with a patch of fine noise in the left third.
           // A gentle texture across it too, so the smooth area has
           // horizontal gradients for block edges to stand out from.
-          v = 70 + (110 * y) / h + 18 * Math.sin(x / 7 + y / 11);
+          v = 70 + (110 * y) / h + (src.ripple ?? 6) * Math.sin(x / 7 + y / 11);
           if (x < w / 3) v += (hashCell(x, y) - 0.5) * 255 * src.amount;
         }
         const o = (y * w + x) * 4;
@@ -433,7 +434,7 @@ export async function renderProbe(req: ProbeRequest): Promise<ProbeResult> {
         renderer.setSource(srcCanvas, srcW, srcH, tap.tag);
       }
       const moving = req.zoomMoving ?? Math.abs(zoomVelocityAt((t) => num(settingsAt(t), 'lens.zoom'), time)) > 0.01;
-      const tel = renderer.render({ settings, time, outFrame: k, frame: k, dt: 1 / r.output, audioLevel: 0, splitX: -1, seed, zoomMoving: moving });
+      const tel = renderer.render({ settings, time, outFrame: k, frame: k, dt: 1 / r.output, audioLevel: 0, splitX: -1, seed, zoomMoving: moving, aimAt: aimFromTimeline(settings, timeline) });
       const plan = renderer.plan!;
       const e = plan.fields[0].exposure;
       const base: ProbeFrame = {

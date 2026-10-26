@@ -37,6 +37,7 @@ import { canvasToBlob, padIndex, seek, zipFrames } from './export/frames';
 import { desktop, isBatchMode, saveBlob } from './platform/desktop';
 import { frameAspect, outputSize, upscaleFactor } from './core/output';
 import { frameState, neededTaps, outFrameAt, rates, shotsFor, systemOf } from './cam/clock';
+import { aimFromTimeline } from './cam/plan';
 import { num } from './core/params';
 import { Guide, shouldShowOnStartup } from './ui/Guide';
 
@@ -368,6 +369,7 @@ export default function App() {
         splitX: splitRef.current > 0.001 ? splitRef.current : -1,
         seed: seedRef.current,
         zoomMoving: Math.abs(zoomVelocity(time)) > 0.01,
+        aimAt: aimFromTimeline(active, timelineRef.current),
       });
     },
     [currentSource],

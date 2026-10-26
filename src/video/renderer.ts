@@ -29,7 +29,7 @@ import {
 import { Settings } from '../core/params';
 import { FrameState, frameState, neededTaps } from '../cam/clock';
 import { Automatics } from '../cam/automatics';
-import { DV_CLASS_BOUNDS, DV_QSCALE, FieldPlan, FramePlan, planFrame } from '../cam/plan';
+import { AimAt, DV_CLASS_BOUNDS, DV_QSCALE, FieldPlan, FramePlan, planFrame } from '../cam/plan';
 import { DvLayout } from '../cam/dvlayout';
 import type { OsdImage } from '../cam/osd';
 import type { FrameSource } from './backend';
@@ -77,6 +77,8 @@ export interface RenderFrame {
   seed: number;
   /** The zoom is moving: the camera shows its zoom bar. */
   zoomMoving?: boolean;
+  /** Keyframed pan, tilt and roll at any source time (see PlanInput). */
+  aimAt?: AimAt;
 }
 
 /** What the renderer worked out about this frame that the rest of the app wants. */
@@ -636,6 +638,7 @@ export class CamRenderer {
       thumbOf: (tag) => this.slots.lookup(tag).thumb,
       auto: this.auto,
       zoomMoving: f.zoomMoving,
+      aimAt: f.aimAt,
       outW: this.canvas.width,
       outH: this.canvas.height,
     });

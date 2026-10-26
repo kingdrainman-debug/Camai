@@ -1006,7 +1006,11 @@ const lab = main.page;
     const Y = luma(big, 1440, 1080);
     const prof = new Float64Array(1440);
     for (let y = 0; y < 1080; y++) for (let x = 700; x < 1430; x++) prof[x] += Math.abs(Y[y * 1440 + x] - Y[y * 1440 + x - 1]);
-    let best = 0;
+    // Correlate what stands out from the average, not the average itself.
+    let pm = 0;
+    for (let x = 700; x < 1430; x++) pm += prof[x] / 730;
+    for (let x = 700; x < 1430; x++) prof[x] -= pm;
+    let best = -Infinity;
     let bestLag = 0;
     for (let lag = 10; lag <= 26; lag++) {
       let c = 0;
@@ -1032,7 +1036,7 @@ const lab = main.page;
     // in the right third, which the noise never touches, must grow: its
     // segments share their bits with macroblocks in the noisy third.
     const err = async (amount) => {
-      const src = { kind: 'noise', amount };
+      const src = { kind: 'noise', amount, ripple: 18 };
       const on = (await probe(lab, { backend: 'cpu', settings: { ...DV }, source: src, ...NATIVE, frames: [0], qno: true })).frames[0];
       const off = (await probe(lab, { backend: 'cpu', settings: { ...DV, 'codec.enabled': false }, source: src, ...NATIVE, frames: [0] })).frames[0];
       const q = on.qno.reduce((a, b) => a + b, 0) / on.qno.length;
@@ -1040,7 +1044,10 @@ const lab = main.page;
     };
     const clean = await err(0);
     const noisy = await err(0.6);
-    if (noisy.psnr > clean.psnr - 3) fail(stage, `noise in the left third cost the untouched right third only ${(clean.psnr - noisy.psnr).toFixed(1)} dB`);
+    // FFmpeg's dvvideo on this picture: the right third loses 1.6 dB. The
+    // cost is real but modest, since its smooth macroblocks have little to
+    // lose; what must hold is that it is not zero.
+    if (noisy.psnr > clean.psnr - 0.3) fail(stage, `noise in the left third cost the untouched right third only ${(clean.psnr - noisy.psnr).toFixed(2)} dB (FFmpeg: 1.6 dB)`);
     if (noisy.q > clean.q - 2) fail(stage, `the mean quantisation number moved only ${clean.q.toFixed(1)} → ${noisy.q.toFixed(1)}`);
     note(stage, `noise in a third of the frame: right third ${clean.psnr.toFixed(1)} → ${noisy.psnr.toFixed(1)} dB, mean quantiser ${clean.q.toFixed(1)} → ${noisy.q.toFixed(1)}`);
   } catch (err) {
@@ -1103,7 +1110,8 @@ const lab = main.page;
   const stage = 'chroma';
   try {
     const spread = async (system) => {
-      const settings = { ...DV, 'format.system': system, 'codec.enabled': false, 'chroma.upsample': 'nearest', 'interlace.enabled': false };
+      // The camera off: its own colour filtering would widen both alike.
+      const settings = { ...DV, 'engine.camera': false, 'format.system': system, 'codec.enabled': false, 'chroma.upsample': 'nearest', 'interlace.enabled': false };
       const H = system === 'pal' ? 576 : 480;
       const f = (await probe(lab, { backend: 'cpu', settings, source: { kind: 'redline', width: 1 }, width: 720, height: H, srcWidth: 704, srcHeight: H, frames: [0] })).frames[0];
       const cr = crOf(f, 720, H);

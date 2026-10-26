@@ -184,6 +184,7 @@ export class CpuRenderer {
       thumbOf: (tag) => this.slots.lookup(tag).thumb,
       auto: this.auto,
       zoomMoving: f.zoomMoving,
+      aimAt: f.aimAt,
       outW,
       outH,
     });
