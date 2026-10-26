@@ -1002,27 +1002,48 @@ const lab = main.page;
     if (rOn < 1.3) fail(stage, `boundary/interior gradient ${rOn.toFixed(2)} in the smooth area — no blocks on the 8-pixel grid`);
     if (Math.abs(rOff - 1) > 0.15) fail(stage, `with the codec off the boundary ratio is ${rOff.toFixed(2)}, not 1`);
     // At 1080p the same blocks are 8 × 1440/704 output pixels apart.
-    const big = (await probe(lab, { backend: 'gpu', settings: { 'framing.dither': 0, 'framing.scaler': 'nearest' }, source: src, width: 1440, height: 1080, frames: [0] })).frames[0];
-    const Y = luma(big, 1440, 1080);
-    const prof = new Float64Array(1440);
-    for (let y = 0; y < 1080; y++) for (let x = 700; x < 1430; x++) prof[x] += Math.abs(Y[y * 1440 + x] - Y[y * 1440 + x - 1]);
-    // Correlate what stands out from the average, not the average itself.
-    let pm = 0;
-    for (let x = 700; x < 1430; x++) pm += prof[x] / 730;
-    for (let x = 700; x < 1430; x++) prof[x] -= pm;
-    let best = -Infinity;
-    let bestLag = 0;
-    for (let lag = 10; lag <= 26; lag++) {
-      let c = 0;
-      for (let x = 720; x + lag < 1430; x++) c += prof[x] * prof[x + lag];
-      if (c > best) {
-        best = c;
-        bestLag = lag;
+    // The codec's own error at 1080p, so the scaler's pixel pattern, which
+    // is the same with the codec on and off, cancels and the blocks remain.
+    const at1080 = { 'framing.dither': 0, 'framing.scaler': 'nearest' };
+    const big = (await probe(lab, { backend: 'gpu', settings: at1080, source: src, width: 1440, height: 1080, frames: [0] })).frames[0];
+    const bigOff = (await probe(lab, { backend: 'gpu', settings: { ...at1080, 'codec.enabled': false }, source: src, width: 1440, height: 1080, frames: [0] })).frames[0];
+    const Ya = luma(big, 1440, 1080);
+    const Yb = luma(bigOff, 1440, 1080);
+    // Each 1080p column comes from one DV raster column (704 active columns
+    // across 1440). The codec's error must step most where the raster
+    // column crosses the 8-column block grid — and not on a grid that
+    // ignored the scaling.
+    const steps = (colOf) => {
+      let onGrid = 0;
+      let nOn = 0;
+      let offGrid = 0;
+      let nOff = 0;
+      for (let x = 700; x < 1430; x++) {
+        const c0 = colOf(x - 1);
+        const c1 = colOf(x);
+        if (c0 === c1) continue;
+        let d = 0;
+        for (let y = 0; y < 1080; y += 2) {
+          const o = y * 1440 + x;
+          d += Math.abs(Ya[o] - Yb[o] - (Ya[o - 1] - Yb[o - 1]));
+        }
+        if (c1 % 8 === 0) {
+          onGrid += d;
+          nOn++;
+        } else {
+          offGrid += d;
+          nOff++;
+        }
       }
-    }
-    const expect = (8 * 1440) / 704;
-    if (Math.abs(bestLag - expect) > 1.2) fail(stage, `at 1080p the blocks repeat every ${bestLag} px, expected ${expect.toFixed(1)}`);
-    note(stage, `boundary/interior ${rOn.toFixed(2)} with the codec, ${rOff.toFixed(2)} without · ${bestLag} px period at 1080p (8 × ${(1440 / 704).toFixed(2)})`);
+      return onGrid / nOn / Math.max(offGrid / nOff, 1e-9);
+    };
+    const scaled = steps((x) => 8 + Math.floor((x * 704) / 1440));
+    const unscaled = steps((x) => 8 + Math.floor((x * 704) / 1408));
+    // The codec's error is everywhere, so the contrast is modest; what
+    // matters is that the scaled grid stands out and the unscaled one not.
+    if (scaled < 1.08) fail(stage, `at 1080p the codec's error does not step on the scaled 8-column grid (${scaled.toFixed(2)}× elsewhere)`);
+    if (unscaled - 1 > (scaled - 1) * 0.5) fail(stage, `at 1080p the blocks fit an unscaled grid as well as the scaled one (${unscaled.toFixed(2)} vs ${scaled.toFixed(2)})`);
+    note(stage, `boundary/interior ${rOn.toFixed(2)} with the codec, ${rOff.toFixed(2)} without · at 1080p the error steps ${scaled.toFixed(2)}× on the scaled block grid, ${unscaled.toFixed(2)}× on an unscaled one`);
   } catch (err) {
     fail(stage, String(err));
   }
@@ -1116,21 +1137,26 @@ const lab = main.page;
       const f = (await probe(lab, { backend: 'cpu', settings, source: { kind: 'redline', width: 1 }, width: 720, height: H, srcWidth: 704, srcHeight: H, frames: [0] })).frames[0];
       const cr = crOf(f, 720, H);
       // Horizontal: columns along a row in the upper half whose Cr departs from grey.
+      // Counted against a quarter of the strongest, so the faint tails of
+      // the field and line averaging do not count as width.
       const row = Math.round(H * 0.3);
+      let hMax = 0;
+      for (let x = 300; x < 420; x++) hMax = Math.max(hMax, Math.abs(cr[row * 720 + x]));
       let h = 0;
-      for (let x = 300; x < 420; x++) if (Math.abs(cr[row * 720 + x]) > 6) h++;
+      for (let x = 300; x < 420; x++) if (Math.abs(cr[row * 720 + x]) > hMax * 0.25) h++;
       // Vertical: rows round the horizontal red line whose Cr departs.
+      const y0 = Math.round(H * 0.6);
+      const y1 = Math.round(H * 0.9);
+      let vMax = 0;
+      for (let y = y0; y < y1; y++) vMax = Math.max(vMax, Math.abs(cr[y * 720 + 100]));
       let v = 0;
-      for (let y = Math.round(H * 0.6); y < Math.round(H * 0.9); y++) if (Math.abs(cr[y * 720 + 100]) > 6) v++;
+      for (let y = y0; y < y1; y++) if (Math.abs(cr[y * 720 + 100]) > vMax * 0.25) v++;
       return { h, v };
     };
     const ntsc = await spread('ntsc');
     const pal = await spread('pal');
-    // The red line itself passes through the DV raster's resampling, so the
-    // widths are compared rather than pinned: 4:1:1 must spread it wider
-    // than 4:2:0 does, and 4:2:0 must spread a horizontal one taller.
-    if (ntsc.h < 4) fail(stage, `525/60's 4:1:1 spreads a 1-pixel red line over only ${ntsc.h} pixels, expected 4 or more`);
-    if (pal.h >= ntsc.h) fail(stage, `625/50's 4:2:0 spreads it over ${pal.h} pixels, no fewer than 4:1:1's ${ntsc.h}`);
+    if (ntsc.h !== 4) fail(stage, `525/60's 4:1:1 spreads a 1-pixel red line over ${ntsc.h} pixels, expected 4`);
+    if (pal.h !== 2) fail(stage, `625/50's 4:2:0 spreads it over ${pal.h} pixels, expected 2`);
     if (pal.v < 2 || pal.v <= ntsc.v) fail(stage, `4:2:0 should spread a horizontal red line vertically more than 4:1:1 does (${pal.v} rows against ${ntsc.v})`);
     note(stage, `red line: 4:1:1 → ${ntsc.h} px wide, ${ntsc.v} rows · 4:2:0 → ${pal.h} px wide, ${pal.v} rows`);
   } catch (err) {
@@ -1194,7 +1220,10 @@ const lab = main.page;
       const settings = { ...DV, 'codec.enabled': false, 'sensor.enabled': true, 'format.sensor': sensor, 'sensor.noise': 0, 'sensor.shot': 0, 'exposure.enabled': true, 'exposure.mode': 'manual', 'exposure.scene': 0, 'exposure.shutter': '1000', 'sensor.headroom': 8 };
       const f = (await probe(lab, { backend: 'cpu', settings, source: { kind: 'point', size: 3 }, ...NATIVE, srcWidth: 704, srcHeight: 480, frames: [0] })).frames[0];
       const Y = luma(f, 720, 480);
-      const cx = Math.round(8 + 704 * 0.4);
+      // The point itself: the brightest pixel.
+      let at = 0;
+      for (let i = 1; i < Y.length; i++) if (Y[i] > Y[at]) at = i;
+      const cx = at % 720;
       const colMean = (x, y0, y1) => {
         let s = 0;
         for (let y = y0; y < y1; y++) s += Y[y * 720 + x];
@@ -1251,8 +1280,10 @@ const lab = main.page;
 {
   const stage = 'knee';
   try {
-    const ramp = async (sensor) => {
-      const settings = { ...DV, 'codec.enabled': false, 'chroma.enabled': false, 'tone.enabled': true, 'sensor.enabled': true, 'format.sensor': sensor, 'sensor.noise': 0, 'sensor.shot': 0, 'sensor.headroom': 0, 'sensor.smear': 0, 'exposure.enabled': true, 'exposure.mode': 'manual', 'exposure.scene': 0, 'exposure.comp': 2 };
+    // scene 0 with the gain up: the tone curve's knee and wall. scene 4 with
+    // the iris doing the work: more light than the wells hold.
+    const ramp = async (sensor, scene) => {
+      const settings = { ...DV, 'codec.enabled': false, 'chroma.enabled': false, 'tone.enabled': true, 'sensor.enabled': true, 'format.sensor': sensor, 'sensor.noise': 0, 'sensor.shot': 0, 'sensor.headroom': 0, 'sensor.smear': 0, 'exposure.enabled': true, 'exposure.mode': 'manual', 'exposure.scene': scene, 'exposure.comp': 2 };
       const f = (await probe(lab, { backend: 'cpu', settings, source: { kind: 'ramp', stops: 8 }, ...NATIVE, srcWidth: 704, srcHeight: 480, frames: [0] })).frames[0];
       const Y = luma(f, 720, 480);
       const prof = [];
@@ -1273,8 +1304,9 @@ const lab = main.page;
       }
       return { prof, chroma };
     };
-    const ccd3 = await ramp('ccd3');
-    const ccd1 = await ramp('ccd1');
+    const ccd3 = await ramp('ccd3', 0);
+    const ccd3Over = await ramp('ccd3', 4);
+    const ccd1Over = await ramp('ccd1', 4);
     // Slope per stop at three places along the ramp (88 px a stop).
     const p = ccd3.prof;
     const top = Math.max(...p);
@@ -1286,8 +1318,8 @@ const lab = main.page;
     const sTop = slopeAt(Math.min(p.length - 23, clipAt + 40));
     if (!(sMid > sKnee * 1.4)) fail(stage, `no knee: slope ${sMid.toFixed(1)} below it, ${sKnee.toFixed(1)} above`);
     if (Math.abs(sTop) > 0.5) fail(stage, `no wall: still rising ${sTop.toFixed(2)}/stop past the clip`);
-    if (ccd1.chroma < ccd3.chroma + 10) fail(stage, `a single chip clips no more colourfully than three (${ccd1.chroma} against ${ccd3.chroma})`);
-    note(stage, `slope ${sMid.toFixed(0)} → ${sKnee.toFixed(0)} → ${sTop.toFixed(1)} /stop: knee and wall · near clip, chroma excursion ${ccd1.chroma} single-chip vs ${ccd3.chroma} three-chip`);
+    if (ccd1Over.chroma < ccd3Over.chroma + 8) fail(stage, `a single chip clips no more colourfully than three (${ccd1Over.chroma} against ${ccd3Over.chroma})`);
+    note(stage, `slope ${sMid.toFixed(0)} → ${sKnee.toFixed(0)} → ${sTop.toFixed(1)} /stop: knee and wall · near clip, chroma excursion ${ccd1Over.chroma} single-chip vs ${ccd3Over.chroma} three-chip`);
   } catch (err) {
     fail(stage, String(err));
   }
@@ -1495,16 +1527,14 @@ const lab = main.page;
       seconds: Math.min(8, cut.srcEndPrev + 1),
       programme: 'silence',
     });
-    let peakAt = 0;
+    // The clunk's onset: the first sample at half its peak. (The peak itself
+    // can be anywhere along a clunk that rings.)
     let peak = 0;
     const from = Math.round((cut.out0 - 0.4) * b.sampleRate);
     const to = Math.round((cut.out0 + 0.4) * b.sampleRate);
-    for (let i = from; i < to; i++) {
-      if (Math.abs(b.left[i]) > peak) {
-        peak = Math.abs(b.left[i]);
-        peakAt = i;
-      }
-    }
+    for (let i = from; i < to; i++) peak = Math.max(peak, Math.abs(b.left[i]));
+    let peakAt = from;
+    while (peakAt < to && Math.abs(b.left[peakAt]) < peak * 0.5) peakAt++;
     const fps = 30000 / 1001;
     const cutFrame = Math.ceil(cut.out0 * fps - 1e-6);
     const clunkFrame = Math.floor((peakAt / b.sampleRate) * fps);

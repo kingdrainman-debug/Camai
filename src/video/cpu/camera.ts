@@ -453,8 +453,8 @@ export function demodPass(F: Buf, fp: FieldPlan, G: Buf): void {
         R = M[0] * m0 + M[1] * m1 + M[2] * m2;
         Gc = M[3] * m0 + M[4] * m1 + M[5] * m2;
         B = M[6] * m0 + M[7] * m1 + M[8] * m2;
-        const peak = Math.max(S(x - 1, r), S(x, r), S(x + 1, r));
-        const t = clamp((peak - 0.8 * well) / (0.18 * well), 0, 1);
+        const least = Math.min(S(x - 1, r), S(x, r), S(x + 1, r));
+        const t = clamp((least - 0.8 * well) / (0.18 * well), 0, 1);
         const sup = t * t * (3 - 2 * t);
         if (sup > 0) {
           const Yl = 0.299 * R + 0.587 * Gc + 0.114 * B;

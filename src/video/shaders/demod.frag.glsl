@@ -65,8 +65,10 @@ void main() {
     // Highlight chroma suppression: where the wells are filling, the camera
     // fades colour towards white, so a fully clipped highlight is white and
     // only its edge, where the filters clip at different points, is coloured.
-    float peak = max(S(x - 1, r), max(S(x, r), S(x + 1, r)));
-    float t = clamp((peak - 0.8 * u_well) / (0.18 * u_well), 0.0, 1.0);
+    // It follows the least-filled site: once every filter is full the colour
+    // is gone, but while only some are, their clipping shows.
+    float least = min(S(x - 1, r), min(S(x, r), S(x + 1, r)));
+    float t = clamp((least - 0.8 * u_well) / (0.18 * u_well), 0.0, 1.0);
     float sup = t * t * (3.0 - 2.0 * t);
     if (sup > 0.0) rgb = mix(rgb, vec3(luma601(rgb)), sup);
   } else {
