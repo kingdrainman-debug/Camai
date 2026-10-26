@@ -586,7 +586,13 @@ const UI_HELPERS = `
       const ui = window.__ui;
       await ui.tab('Camera');
       const sect = await ui.section('Exposure');
-      const row = ui.row(sect, 'Compensation');
+      // Held exposure: the automatic loop has memory, and scrubbing would
+      // measure its settling rather than the keyframes.
+      const mode = ui.row(sect, 'Mode').querySelector('select');
+      mode.value = 'manual';
+      mode.dispatchEvent(new Event('change', { bubbles: true }));
+      await ui.sleep(300);
+      const row = ui.row(await ui.section('Exposure'), 'Compensation');
       row.querySelector('.stopwatch').click();
       await ui.sleep(200);
       const scrub = document.querySelector('input.scrub');
