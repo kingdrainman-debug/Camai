@@ -123,8 +123,11 @@ export class Automatics {
       (illum[0] * 0.3 + illum[1] * 0.59 + illum[2] * 0.11);
     const maxGainStops = expOn ? num(s, 'exposure.maxGain') / 6.0206 : 0;
     const manualStops = manualT !== null ? Math.log2(manualT / base) : 0;
-    const Xmax = maxGainStops + Math.max(0, manualStops);
-    const Xmin = IRIS_MIN + (manualT !== null ? Math.min(0, manualStops) : Math.log2(SHUTTER_FASTEST / base));
+    // A manual shutter is fixed: the range is the gain and the iris either
+    // side of it. Automatic, the shutter itself moves from a field period
+    // up to 1/4000 s.
+    const Xmax = maxGainStops + manualStops;
+    const Xmin = IRIS_MIN + (manualT !== null ? manualStops : Math.log2(SHUTTER_FASTEST / base));
 
     // The previous field, or a recent one: a preview that cannot keep up
     // skips frames, and the loops catch up over the gap rather than
@@ -186,7 +189,6 @@ export class Automatics {
         return t;
       };
       gainStops -= take(maxGainStops);
-      if (manualStops > 0) shutterStops -= take(manualStops);
       irisStops -= take(-IRIS_SHUTTER_POINT);
       if (manualT === null) shutterStops -= take(-Math.log2(SHUTTER_FASTEST / base));
       irisStops -= take(IRIS_SHUTTER_POINT - IRIS_MIN);

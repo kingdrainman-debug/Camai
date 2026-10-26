@@ -33,6 +33,7 @@ export type ProbeSource =
   | { kind: 'counter' }
   | { kind: 'bar'; pxPerSec: number; width?: number }
   | { kind: 'zone' }
+  | { kind: 'hlines' }
   | { kind: 'edge'; low?: number; high?: number }
   | { kind: 'redline'; width?: number }
   | { kind: 'redtext' }
@@ -130,7 +131,9 @@ function drawSource(ctx: CanvasRenderingContext2D, w: number, h: number, src: Pr
           v = 60 + hashCell(Math.floor((x + shift) / cell), Math.floor(y / cell)) * 140;
         } else {
           // A smooth gradient, with a patch of fine noise in the left third.
-          v = 70 + (110 * y) / h;
+          // A gentle texture across it too, so the smooth area has
+          // horizontal gradients for block edges to stand out from.
+          v = 70 + (110 * y) / h + 18 * Math.sin(x / 7 + y / 11);
           if (x < w / 3) v += (hashCell(x, y) - 0.5) * 255 * src.amount;
         }
         const o = (y * w + x) * 4;
@@ -153,6 +156,13 @@ function drawSource(ctx: CanvasRenderingContext2D, w: number, h: number, src: Pr
     const x = (w * 0.1 + src.pxPerSec * t) % w;
     ctx.fillStyle = 'rgb(230,230,230)';
     ctx.fillRect(x, 0, bw, h);
+  } else if (src.kind === 'hlines') {
+    // Alternate light and dark lines: all of the picture's vertical detail
+    // is at the top of the band, where one field alone cannot carry it.
+    for (let y = 0; y < h; y++) {
+      ctx.fillStyle = (y >> 1) % 2 ? '#c8c8c8' : '#383838';
+      ctx.fillRect(0, y, w, 1);
+    }
   } else if (src.kind === 'zone') {
     // A zone plate: frequency rising with radius, to Nyquist at the edge.
     const img = ctx.createImageData(w, h);

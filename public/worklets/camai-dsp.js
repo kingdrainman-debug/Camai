@@ -168,7 +168,7 @@ class CamRecorder extends AudioWorkletProcessor {
     this.noiseBurst = 0;
     this.tickAcc = 0;
     this.huntPrev = 0;
-    this.eq = [0, 1].map(() => ({ lo: new Biquad(), pres: new Biquad(), hi: new Biquad(), wind: new Biquad(), aa1: new Biquad(), aa2: new Biquad() }));
+    this.eq = [0, 1].map(() => ({ lo: new Biquad(), pres: new Biquad(), hi: new Biquad(), wind: new Biquad(), aa: [new Biquad(), new Biquad(), new Biquad(), new Biquad()] }));
     this.agcEnv = 0;
     this.agcGain = 1;
     this.history = [new Float32Array(HISTORY), new Float32Array(HISTORY)];
@@ -223,9 +223,9 @@ class CamRecorder extends AudioWorkletProcessor {
       e.pres.set('peaking', 3800, 1.1, this.p('mic.presence', 0));
       e.hi.set('lowpass', this.p('mic.high', 12000), 0.707);
       e.wind.set('highpass', 220, 0.8);
-      // Two sections for the 32 kHz recording's anti-alias filter.
-      e.aa1.set('lowpass', 14600, 0.54);
-      e.aa2.set('lowpass', 14600, 1.31);
+      // An eighth-order Butterworth for the 32 kHz recording's anti-alias
+      // filter: flat to 14 kHz, nothing left by 16.
+      [0.5098, 0.6013, 0.9, 2.5629].forEach((q, i) => e.aa[i].set('lowpass', 14500, q));
     }
     this.frame = -1;
   }
@@ -434,8 +434,10 @@ class CamRecorder extends AudioWorkletProcessor {
         const e0 = this.eq[0];
         const e1 = this.eq[1];
         if (sr > 33000) {
-          yL = e0.aa2.step(e0.aa1.step(yL));
-          yR = e1.aa2.step(e1.aa1.step(yR));
+          for (let k = 0; k < 4; k++) {
+            yL = e0.aa[k].step(yL);
+            yR = e1.aa[k].step(yR);
+          }
         }
         yL = dv12(Math.round(clamp(yL, -1, 1) * 32767)) / 32767;
         yR = dv12(Math.round(clamp(yR, -1, 1) * 32767)) / 32767;

@@ -20,7 +20,7 @@ function buildArgs(opts) {
         '-c:v', 'dvvideo', '-flags', '+ilme+ildct', '-top', '0',
         '-aspect', opts.dvAspect || '4:3',
       );
-      if (audioPath) args.push('-c:a', 'pcm_s16le', '-ar', '48000', '-ac', '2');
+      if (audioPath) args.push('-af', 'apad', '-c:a', 'pcm_s16le', '-ar', '48000', '-ac', '2');
       args.push('-f', 'dv');
       break;
     case 'prores':
