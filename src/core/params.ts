@@ -225,6 +225,33 @@ const OSD_COLOURS: EnumOption[] = [
   { value: 'orange', label: 'Orange', code: 2, hint: 'The colour of many analogue date imprints.' },
 ];
 
+const OSD_FONTS: EnumOption[] = [
+  { value: 'classic', label: 'Classic 5 × 7', code: 0, hint: 'The plain dot-matrix characters most cameras drew.' },
+  { value: 'bold', label: 'Bold', code: 1, hint: 'Strokes a pixel wider: heavier and easier to read on a busy picture.' },
+  { value: 'italic', label: 'Italic', code: 2, hint: 'Leaning to the right.' },
+  { value: 'segment', label: 'Seven-segment', code: 3, hint: 'Digits built from segments, like a clock radio’s display. Letters stay dot-matrix.' },
+  { value: 'large', label: 'Large', code: 4, hint: 'Twice the size: the chunky imprint of many cameras’ date.' },
+  { value: 'dotmatrix', label: 'Dot matrix', code: 5, hint: 'Twice the size, every dot separate.' },
+  { value: 'hollow', label: 'Hollow', code: 6, hint: 'Twice the size, in outline.' },
+];
+
+const OSD_EDGES: EnumOption[] = [
+  { value: 'outline', label: 'Black outline', code: 0, hint: 'A one-pixel black edge all round, so it reads on any picture.' },
+  { value: 'shadow', label: 'Drop shadow', code: 1, hint: 'A black shadow below and to the right.' },
+  { value: 'none', label: 'None', code: 2, hint: 'Bare ink, which disappears against a bright sky.' },
+];
+
+const BATTERY_STYLES: EnumOption[] = [
+  { value: 'bars4', label: 'Four bars', code: 0 },
+  { value: 'bars3', label: 'Three bars', code: 1 },
+  { value: 'bars5', label: 'Five thin bars', code: 2 },
+  { value: 'fill', label: 'Continuous fill', code: 3 },
+  { value: 'vertical', label: 'Upright', code: 4, hint: 'Standing on end, filling from the bottom.' },
+  { value: 'percent', label: 'Percentage', code: 5, hint: 'A small gauge with the charge as a number.' },
+  { value: 'minutes', label: 'Minutes left', code: 6, hint: 'The time remaining, as later batteries reported it.' },
+  { value: 'lowonly', label: 'Only when low', code: 7, hint: 'Nothing until the battery is nearly flat, then an empty outline.' },
+];
+
 const COUNTERS: EnumOption[] = [
   { value: 'timecode', label: 'Timecode', code: 0 },
   { value: 'remain', label: 'Minutes remaining', code: 1 },
@@ -622,9 +649,12 @@ const DISPLAY_GROUPS: Group[] = [
       { key: 'osd.rec', type: 'bool', label: 'REC / STBY', def: true, hint: 'The recording indicator with its red dot.' },
       { key: 'osd.counter', type: 'enum', label: 'Counter', options: COUNTERS, def: 'timecode', hint: 'Tape position, or the tape left.' },
       { key: 'osd.battery', type: 'bool', label: 'Battery', def: true, hint: 'The battery gauge, which drains.' },
+      { key: 'osd.batteryStyle', type: 'enum', label: 'Battery style', options: BATTERY_STYLES, def: 'bars4', hint: 'The shape of the gauge.' },
       { key: 'osd.zoomBar', type: 'bool', label: 'Zoom bar', def: true, hint: 'W to T, shown while zooming, with the digital zoom readout beyond it.' },
       { key: 'osd.mode', type: 'bool', label: 'Mode readout', def: true, hint: 'SP or LP, 12-bit or 16-bit, 16:9.' },
       { key: 'osd.warnings', type: 'bool', label: 'Warnings', def: true, advanced: true, hint: 'Blinking low-battery and end-of-tape warnings.' },
+      { key: 'osd.font', type: 'enum', label: 'Font', options: OSD_FONTS, def: 'classic', hint: 'The character generator’s lettering.' },
+      { key: 'osd.edge', type: 'enum', label: 'Edge', options: OSD_EDGES, def: 'outline', hint: 'How the lettering is set off from the picture.' },
       { key: 'osd.colour', type: 'enum', label: 'Colour', options: OSD_COLOURS, def: 'white', advanced: true, hint: 'The character generator’s ink.' },
     ],
   },
@@ -644,6 +674,8 @@ const DISPLAY_GROUPS: Group[] = [
       { key: 'date.day', type: 'int', label: 'Day', min: 1, max: 31, def: 25, noRandom: true, hint: 'Day of the first shot.' },
       { key: 'date.hour', type: 'float', label: 'Time of day', min: 0, max: 23.99, step: 0.01, def: 8.25, unit: 'h', noRandom: true, hint: 'Hour of the first shot, as a decimal.' },
       { key: 'date.unset', type: 'bool', label: 'Clock never set', def: false, hint: 'The camera shows its factory default instead of the date.' },
+      { key: 'date.font', type: 'enum', label: 'Font', options: OSD_FONTS, def: 'classic', hint: 'The lettering of the date and time.' },
+      { key: 'date.edge', type: 'enum', label: 'Edge', options: OSD_EDGES, def: 'outline', hint: 'How the date is set off from the picture.' },
       { key: 'date.colour', type: 'enum', label: 'Colour', options: OSD_COLOURS, def: 'white', advanced: true, hint: 'The ink of the date characters.' },
     ],
   },

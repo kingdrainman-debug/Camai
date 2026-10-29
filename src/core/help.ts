@@ -318,11 +318,14 @@ export const PARAM_HELP: Record<string, string> = {
   'osd.insert': 'Where the display enters the chain. After decode is the AV output with the display on; before the codec burns it into the recording, which no camera did; on the display draws it on the output’s own pixel grid.',
   'osd.rec': 'REC with a red dot while recording; STBY once the battery has died and the camera has stopped.',
   'osd.counter': 'The tape counter in hours, minutes and seconds — tape time, which runs straight across breaks — or the minutes of tape remaining.',
-  'osd.battery': 'The battery gauge with up to four bars. It follows the Battery section when that is on, and blinks when nearly empty.',
+  'osd.battery': 'The battery gauge. It follows the Battery section when that is on, and blinks when nearly empty.',
+  'osd.batteryStyle': 'The shape of the battery gauge: four, three or five bars in a case with a nub, a continuous fill, an upright cell filling from the bottom, the charge as a percentage, the minutes left as later batteries reported them, or nothing at all until it is nearly flat. All drawn for this project in the manner of the period.',
   'osd.zoomBar': 'The W–T bar with its marker, shown while the zoom is moving, and the digital magnification once past the optical range.',
   'osd.mode': 'The recording mode: SP or LP, 12-bit or 16-bit audio, and 16:9 when the camera is in its wide mode.',
   'osd.warnings': 'Lets the low-battery warning blink. Off shows the gauge steadily however empty.',
-  'osd.colour': 'The character generator’s ink: white, or yellow as some cameras used. The black edge is always there, so it reads on any picture.',
+  'osd.font': 'The lettering of the display. Classic is the plain 5 × 7 dot matrix; bold, italic and seven-segment digits are the same size; large, dot matrix and hollow are twice the size, as some cameras drew their imprints. Every face is drawn for this project.',
+  'osd.edge': 'How the lettering is keyed over the picture: a black outline all round, as most character generators did, a drop shadow, or bare ink that vanishes against bright sky.',
+  'osd.colour': 'The character generator’s ink: white, or yellow as some cameras used. Orange is the third choice. The Edge setting keeps it readable on a bright picture.',
 
   /* ---------------- date ---------------- */
   'date.enabled': 'Draws the date and time of recording into the chain at the chosen point.',
@@ -334,6 +337,8 @@ export const PARAM_HELP: Record<string, string> = {
   'date.day': 'The day of the month the first shot was taken. A day past the month’s end is taken as its last day.',
   'date.hour': 'The time of day of the first shot, in hours as a decimal: 8.25 is quarter past eight in the morning.',
   'date.unset': 'The camera’s clock was never set, so every recording is stamped with its factory default — midnight on the first of January 2000 — and runs on from there.',
+  'date.font': 'The lettering of the date and time, chosen apart from the display’s, as the imprint and the viewfinder were often different. The large faces suit an imprint burned in before the codec.',
+  'date.edge': 'How the date is keyed over the picture: outline, drop shadow, or bare ink.',
   'date.colour': 'The ink of the date characters. Orange was the colour of many analogue imprints.',
 
   /* ---------------- capture ---------------- */

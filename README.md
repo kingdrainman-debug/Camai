@@ -302,7 +302,7 @@ src/cam/clock.ts          output time → DV frames, fields, source moments, sho
 src/cam/automatics.ts     automatic exposure and white balance, with memory
 src/cam/plan.ts           every number both renderers use, per field and per frame
 src/cam/dvlayout.ts       macroblocks, superblocks and the segment shuffle
-src/cam/osd.ts            the character generator: an original 5×7 font, two layers
+src/cam/osd.ts            the character generator: an original 5×7 font and seven faces derived from it, eight battery gauges, two layers
 public/worklets/camai-events.js   the event clock, shared by picture and sound
 public/worklets/camai-dsp.js      the camera's sound
 src/video/shaders/        scene, blur, smear, sensor, demod, dsp, chroma, fdct,
