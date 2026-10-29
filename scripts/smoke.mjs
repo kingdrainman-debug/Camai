@@ -563,7 +563,9 @@ function bandEnergy(d, sr, lo, hi, from = 0, to = d.length) {
     // The automatic gain: a loud second, then silence. The room tone rises
     // through the silence as the gain comes back up.
     const agc = await renderAudio(page, {
-      settings: { 'mic.enabled': true, 'mic.room': -60, 'agc.enabled': true, 'agc.release': 1.5, 'agc.maxGain': 30 },
+      // A camera that squashes loud sound (Maximum cut well above the
+      // default, which spares the source's own sound).
+      settings: { 'mic.enabled': true, 'mic.room': -60, 'agc.enabled': true, 'agc.release': 1.5, 'agc.maxGain': 30, 'agc.maxCut': 20 },
       seconds: 4,
       programme: 'burst',
     });
