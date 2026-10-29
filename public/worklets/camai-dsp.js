@@ -68,6 +68,14 @@ class Resonator {
     this.a1 = 2 * r * Math.cos(w);
     this.a2 = -r * r;
     this.g = 1 - r;
+    this.sinW = Math.sin(w);
+  }
+  /**
+   * Strike it so the ring peaks at about `amp`. (Adding to y1 alone rings at
+   * amp / sin(w): 55 times over for a 140 Hz clunk.)
+   */
+  kick(amp) {
+    this.y1 += amp * this.sinW;
   }
   step(x) {
     const y = x * this.g + this.a1 * this.y1 + this.a2 * this.y2;
@@ -284,6 +292,7 @@ class CamRecorder extends AudioWorkletProcessor {
     const agcOn = this.b('agc.enabled', false);
     const target = dbToGain(this.p('agc.target', -18));
     const maxGain = dbToGain(this.p('agc.maxGain', 24));
+    const minGain = dbToGain(-this.p('agc.maxCut', 3));
     const atk = Math.exp(-1 / (Math.max(this.p('agc.attack', 8), 0.1) * 0.001 * sr));
     const rel = Math.exp(-1 / (Math.max(this.p('agc.release', 2.5), 0.01) * sr));
     const twelve = this.b('audio.twelve', false);
@@ -311,8 +320,8 @@ class CamRecorder extends AudioWorkletProcessor {
           // A new shot: the cut is dead, with a click, and the REC button's
           // clunk is the first thing on it.
           if (this.lastShot >= 0 || this.frameState.sinceShot < 0.1) {
-            this.clunkLo.y1 += recLvl * 6;
-            this.clunkHi.y1 += recLvl * 3;
+            this.clunkLo.kick(recLvl);
+            this.clunkHi.kick(recLvl * 0.5);
             this.noiseBurst = 0.012 * sr;
           }
           this.lastShot = this.frameState.shot;
@@ -368,8 +377,8 @@ class CamRecorder extends AudioWorkletProcessor {
           // A bump starting on this tick: the hand hitting the body.
           if (bumpRate > 0 && ihash(tk, this.seed, 41) < perTick(bumpRate)) {
             const a = 0.5 + ihash(tk, this.seed, 42);
-            this.thumpLo.y1 += handLvl * 8 * a;
-            this.thumpMid.y1 += handLvl * 3 * a;
+            this.thumpLo.kick(handLvl * a);
+            this.thumpMid.kick(handLvl * 0.4 * a);
             this.noiseBurst = Math.max(this.noiseBurst, 0.05 * sr);
           }
         }
@@ -377,8 +386,8 @@ class CamRecorder extends AudioWorkletProcessor {
           this.tickAcc += (30 + 70 * Math.min(this.huntSpeed, 3)) / sr;
           if (this.tickAcc >= 1) {
             this.tickAcc -= 1;
-            this.tickHi.y1 += focusLvl * 4;
-            this.tickLo.y1 += focusLvl * 2;
+            this.tickHi.kick(focusLvl);
+            this.tickLo.kick(focusLvl * 0.5);
           }
         }
         mech += this.tickHi.step(0) + this.tickLo.step(0);
@@ -422,7 +431,9 @@ class CamRecorder extends AudioWorkletProcessor {
       if (agcOn) {
         const lvl = Math.max(Math.abs(yL), Math.abs(yR));
         this.agcEnv = lvl > this.agcEnv ? lvl + (this.agcEnv - lvl) * atk : lvl + (this.agcEnv - lvl) * rel;
-        const want = clamp(target / Math.max(this.agcEnv, 1e-6), 0.05, maxGain);
+        // It lifts quiet passages a long way and turns loud ones down only a
+        // little: a programme recorded at a sensible level stays as it was.
+        const want = clamp(target / Math.max(this.agcEnv, 1e-6), minGain, maxGain);
         // Gain comes down fast and goes back up slowly: the breathing.
         this.agcGain = want < this.agcGain ? want + (this.agcGain - want) * atk : want + (this.agcGain - want) * rel;
         yL *= this.agcGain;

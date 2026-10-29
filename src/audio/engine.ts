@@ -196,9 +196,16 @@ export function zoomVelocityAt(zoomAt: (t: number) => number, t: number): number
 /**
  * Realtime wrapper around {@link buildChain} that owns the AudioContext and the
  * MediaElementSource for the preview player.
+ *
+ * A media element can be connected to Web Audio once in its lifetime: a
+ * second createMediaElementSource throws, even from a new AudioContext. The
+ * app reuses one <video> for every file it opens, so the context and each
+ * element's source are made once and kept; opening another file only
+ * rebuilds the chain behind them.
  */
 export class CamAudioEngine {
   private ctx: AudioContext | null = null;
+  private readonly sources = new WeakMap<HTMLMediaElement, MediaElementAudioSourceNode>();
   private source: MediaElementAudioSourceNode | null = null;
   private chain: AudioChain | null = null;
   private element: HTMLMediaElement | null = null;
@@ -226,13 +233,16 @@ export class CamAudioEngine {
     if (typeof seed === 'number') this.seed = seed;
     if (this.element === element && this.chain) return;
     await this.detach();
-    // A MediaElementSource can only be created once per element per context, so
-    // the context is recreated alongside it whenever the media changes.
-    const ctx = new AudioContext({ latencyHint: 'interactive' });
-    this.ctx = ctx;
+    if (!this.ctx || this.ctx.state === 'closed') this.ctx = new AudioContext({ latencyHint: 'interactive' });
+    const ctx = this.ctx;
+    let source = this.sources.get(element);
+    if (!source) {
+      source = ctx.createMediaElementSource(element);
+      this.sources.set(element, source);
+    }
     this.element = element;
-    this.source = ctx.createMediaElementSource(element);
-    this.chain = await buildChain(ctx, this.source, settings, { seed: this.seed });
+    this.source = source;
+    this.chain = await buildChain(ctx, source, settings, { seed: this.seed });
     this.chain.output.connect(ctx.destination);
     this.destination = ctx.createMediaStreamDestination();
     this.chain.output.connect(this.destination);
@@ -254,6 +264,11 @@ export class CamAudioEngine {
     return this.chain?.level() ?? 0;
   }
 
+  /**
+   * Take the chain down. The context and the element's source stay, ready
+   * for the next attach; the source is disconnected, so the element is
+   * silent until then rather than playing around the camera.
+   */
   async detach(): Promise<void> {
     this.chain?.dispose();
     this.chain = null;
@@ -261,11 +276,6 @@ export class CamAudioEngine {
     this.source = null;
     this.destination?.disconnect();
     this.destination = null;
-    if (this.ctx) {
-      await this.ctx.close().catch(() => undefined);
-      this.ctx = null;
-    }
     this.element = null;
   }
 }
-

@@ -762,6 +762,7 @@ const AUDIO_GROUPS: Group[] = [
       { key: 'agc.enabled', type: 'bool', label: 'Enabled', def: false, noRandom: true },
       { key: 'agc.target', type: 'float', label: 'Target', min: -30, max: -6, step: 0.1, def: -18, unit: 'dBFS', hint: 'The level the AGC tries to hold.' },
       { key: 'agc.maxGain', type: 'float', label: 'Maximum gain', min: 0, max: 40, step: 0.1, def: 24, unit: 'dB', hint: 'How far it will turn up a quiet room.' },
+      { key: 'agc.maxCut', type: 'float', label: 'Maximum cut', min: 0, max: 30, step: 0.1, def: 3, unit: 'dB', hint: 'How far the camera will turn loud sound down. Small, so the source’s own sound survives; raise it for a camera that flattens everything.' },
       { key: 'agc.attack', type: 'float', label: 'Attack', min: 1, max: 200, step: 0.1, def: 8, unit: 'ms', log: true, hint: 'How quickly it ducks.' },
       { key: 'agc.release', type: 'float', label: 'Release', min: 0.2, max: 10, step: 0.01, def: 2.5, unit: 's', log: true, hint: 'How slowly it recovers: the breathing.' },
     ],

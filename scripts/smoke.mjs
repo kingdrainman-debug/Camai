@@ -456,6 +456,42 @@ async function settledStats(page, { minMean = 20, tolerance = 2.5, timeout = 300
   }
 }
 
+/* ---- 3b. opening a second clip into the same player keeps its sound ----
+ * A media element can be wired into Web Audio once in its life. The player
+ * reuses one <video> for every file, so a second file must not try again. */
+{
+  const { page } = main;
+  const r = await page.evaluate(async () => {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const toasts = [];
+    const open = async (name) => {
+      const blob = await (await fetch('/fixture.webm')).blob();
+      const dt = new DataTransfer();
+      dt.items.add(new File([blob], name, { type: 'video/webm' }));
+      window.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true }));
+      await sleep(300);
+      for (let k = 0; k < 100; k++) {
+        const v = document.querySelector('video');
+        if (v && v.readyState >= 2 && v.videoWidth > 0) break;
+        await sleep(100);
+      }
+      document.querySelector('.transport .play')?.click();
+      await sleep(1500);
+      const t = document.querySelector('.toast')?.textContent ?? '';
+      if (t) toasts.push(t);
+      document.querySelector('.transport .play')?.click();
+      await sleep(200);
+    };
+    await open('first.webm');
+    await open('second.webm');
+    await open('third.webm');
+    return { toasts, same: true };
+  });
+  const bad = r.toasts.filter((t) => /audio/i.test(t));
+  if (bad.length) fail('reopen', `opening another clip broke the sound: ${bad[0]}`);
+  else note('reopen', 'three clips opened into the same player in turn, each played with its sound');
+}
+
 /* ================================================================== *
  * 4. The sound: the worklet registers, the camera hears itself, 12-bit
  *    audio is band-limited and the automatic gain breathes
@@ -536,7 +572,24 @@ function bandEnergy(d, sr, lo, hi, from = 0, to = d.length) {
     const late = rms(agc.left, Math.round(3.4 * sr), Math.round(3.9 * sr));
     const lift = 20 * Math.log10(late / Math.max(early, 1e-9));
     if (lift < 6) fail(stage, `the AGC did not breathe: room tone rose only ${lift.toFixed(1)} dB after the loud passage`);
-    note(stage, `worklet ok · silent clip still has the camera (rms ${whine.toExponential(1)}) · 12-bit −${cut.toFixed(0)} dB above 16 kHz · AGC lifts the room +${lift.toFixed(1)} dB`);
+    // The source's own sound survives the camera: a tone through the
+    // flagship preset (microphone, mechanics, AGC, 12-bit) keeps its level
+    // within a few dB, with the camera's noises well under it.
+    const flag = await page.evaluate(() => window.__camai.presets['palmcorder-2002']);
+    const tone = await renderAudio(page, { settings: flag, seconds: 1.2, programme: 'burst' });
+    let ts = 0;
+    let tc = 0;
+    const i0 = Math.round(0.3 * tone.sampleRate);
+    const i1 = Math.round(0.8 * tone.sampleRate);
+    for (let i = i0; i < i1; i++) {
+      const w = (2 * Math.PI * 440 * i) / tone.sampleRate;
+      ts += tone.left[i] * Math.sin(w);
+      tc += tone.left[i] * Math.cos(w);
+    }
+    const kept = (2 * Math.hypot(ts, tc)) / (i1 - i0);
+    const keptDb = 20 * Math.log10(kept / 0.6);
+    if (keptDb < -4) fail(stage, `the flagship camera turned the source's own sound down ${(-keptDb).toFixed(1)} dB`);
+    note(stage, `worklet ok · silent clip still has the camera (rms ${whine.toExponential(1)}) · 12-bit −${cut.toFixed(0)} dB above 16 kHz · AGC lifts the room +${lift.toFixed(1)} dB · the source's sound through the flagship ${keptDb.toFixed(1)} dB`);
   } catch (err) {
     fail(stage, String(err));
   }

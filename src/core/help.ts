@@ -390,6 +390,7 @@ export const PARAM_HELP: Record<string, string> = {
   'agc.enabled': 'Switches the automatic gain control on: the pumping and breathing of consumer camera sound.',
   'agc.target': 'The level the AGC tries to hold, in dBFS. Higher is louder and closer to the limit.',
   'agc.maxGain': 'The most it will turn up a quiet passage, in dB. 20–30 dB makes a silent room roar with its own air.',
+  'agc.maxCut': 'The most it will turn down a loud passage, in dB. A few dB keeps the soundtrack you brought in as it was recorded, with the camera’s breathing in the quiet parts; tens of dB squash everything to one level, the way the cheapest cameras did.',
   'agc.attack': 'How quickly the gain comes down when something loud happens, in milliseconds. Fast ducks everything at once.',
   'agc.release': 'How slowly the gain comes back up afterwards, in seconds. A second or more is the audible breathing.',
 
