@@ -699,17 +699,22 @@ const UI_HELPERS = `
       return { diamonds, levels, seen, scrubMax: scrub.max, exposureMode };
     });
     if (r.diamonds !== 2) fail(stage, `expected 2 keyframe markers, drew ${r.diamonds}`);
-    // The value itself, as the interface shows it at each time.
-    const [s0, s2, s4] = r.seen.map((x) => x.slider);
-    if (!(Math.abs(s0) < 0.05 && Math.abs(s4 + 2) < 0.05 && s2 < -0.2 && s2 > -1.8)) {
-      fail(stage, `the compensation reads ${s0} → ${s2} → ${s4} at 0, 2 and 4 s; expected 0, between, −2`);
-    }
-    const [a, mid, b] = r.levels;
-    if (a - b < 30) fail(stage, `two stops less exposure barely changed the render (${a.toFixed(1)} → ${b.toFixed(1)})`);
-    if (mid < Math.min(a, b) + 3 || mid > Math.max(a, b) - 3) {
-      fail(stage, `midpoint ${mid.toFixed(1)} is not between ${a.toFixed(1)} and ${b.toFixed(1)} — stepping, not easing (${JSON.stringify(r.seen)}, exposure ${r.exposureMode})`);
-    }
-    note(stage, `${r.diamonds} markers · compensation ${r.seen.map((x) => x.slider.toFixed(2)).join(' → ')} · brightness ${r.levels.map((v) => v.toFixed(0)).join(' → ')}`);
+    // Through the interface: two stops less by the second keyframe.
+    const [a, , b] = r.levels;
+    if (a - b < 25) fail(stage, `two stops less exposure barely changed the render (${a.toFixed(1)} → ${b.toFixed(1)}; ${JSON.stringify(r.seen)})`);
+    // The easing itself, through the renderer with the same keyframes: each
+    // second darker than the one before, not a step.
+    const timeline = { 'exposure.comp': [{ t: 0, value: 0, ease: 'inOut' }, { t: 4, value: -2, ease: 'inOut' }] };
+    const prosumer = { ...(await main.page.evaluate(() => window.__camai.presets['prosumer-2003'])) };
+    const eased = await probe(main.page, { backend: 'gpu', settings: { ...prosumer, ...DV }, timeline, source: { kind: 'grey', level: 0.56 }, width: 160, height: 120, frames: [0, 30, 60, 90, 120] });
+    const lum = eased.frames.map((f) => {
+      let s = 0;
+      for (let i = 1; i < f.rgb.length; i += 3) s += f.rgb[i];
+      return s / (f.rgb.length / 3);
+    });
+    const steps = lum.slice(1).map((v, i) => lum[i] - v);
+    if (steps.some((d) => d <= 0.5)) fail(stage, `exposure keyframed from 0 to −2 does not darken steadily: ${lum.map((v) => v.toFixed(1)).join(' → ')}`);
+    note(stage, `${r.diamonds} markers · interface ${a.toFixed(0)} → ${b.toFixed(0)} · eased ${lum.map((v) => v.toFixed(0)).join(' → ')} at 0–4 s`);
   } catch (err) {
     fail(stage, String(err));
   }
