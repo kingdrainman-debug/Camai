@@ -354,8 +354,14 @@ export default function App() {
       const src = currentSource(viaCanvas);
       if (src) {
         const fs = frameState({ settings: active, time, outFrame, seed: seedRef.current });
+        // Every missing moment would get the same picture — whatever the
+        // element shows now — so upload it once and point the rest at it.
+        let uploaded = -1;
         for (const tap of neededTaps(fs)) {
-          if (!renderer.hasFrame(tap.tag)) renderer.setSource(src.el, src.width, src.height, tap.tag);
+          if (renderer.hasFrame(tap.tag)) continue;
+          if (uploaded >= 0 && renderer.aliasSource(tap.tag, uploaded)) continue;
+          renderer.setSource(src.el, src.width, src.height, tap.tag);
+          uploaded = tap.tag;
         }
       }
 
@@ -380,6 +386,21 @@ export default function App() {
    * shows has been uploaded, seeking the video to each. Two fields are two
    * moments; a slow shutter integrates several.
    */
+  /**
+   * An export's source decoder, when the desktop shell can decode the file
+   * front to back (see electron/decode.cjs): frame k is the picture from
+   * t0 + k / fps. Null means the export seeks the <video> element instead.
+   */
+  const decodeRef = useRef<{
+    id: number;
+    fps: number;
+    t0: number;
+    width: number;
+    height: number;
+    lastK: number;
+    lastTag: number;
+  } | null>(null);
+
   const prepareFrames = useCallback(
     async (outFrame: number, time: number) => {
       const renderer = rendererRef.current;
@@ -391,6 +412,29 @@ export default function App() {
       const fs = frameState({ settings: active, time, outFrame, seed: seedRef.current });
       for (const tap of neededTaps(fs)) {
         if (renderer.hasFrame(tap.tag)) continue;
+        const dec = decodeRef.current;
+        if (dec && desktop?.decodeFrame) {
+          // The frame showing at that moment: the last one to start at or
+          // before it (with the same 2 ms grace as a seek).
+          const k = Math.max(0, Math.floor((tap.srcT + 0.002 - dec.t0) * dec.fps + 1e-6));
+          // Two fields on one source frame share one upload.
+          if (k === dec.lastK && renderer.aliasSource(tap.tag, dec.lastTag)) continue;
+          if (k >= dec.lastK) {
+            try {
+              const px = await desktop.decodeFrame(dec.id, k);
+              if (px) {
+                renderer.setSourcePixels(px, dec.width, dec.height, tap.tag);
+                dec.lastK = k;
+                dec.lastTag = tap.tag;
+                continue;
+              }
+              // Past the end of the clip: hold the last frame, as a player does.
+              if (dec.lastTag >= 0 && renderer.aliasSource(tap.tag, dec.lastTag)) continue;
+            } catch {
+              // Fall through to seeking for this one.
+            }
+          }
+        }
         if (video) {
           // A hair past the moment, so the seek lands inside the frame that
           // was showing then rather than on the boundary before it.
@@ -450,8 +494,12 @@ export default function App() {
       // last frame drawn is already correct. Skipping it keeps a paused
       // window from burning a core.
       const canvas = canvasRef.current;
+      // Everything in a frame is a function of its output frame number, so a
+      // display refresh inside the same frame would draw the same picture:
+      // at 60 Hz that is every other refresh, for a 29.97 frame/s camera.
+      const outFrame = outFrameAt(activeSettingsRef.current, seedRef.current, time);
       const changed =
-        time !== lastDrawn.current.time ||
+        outFrame !== lastDrawn.current.outFrame ||
         settingsRef.current !== lastDrawn.current.settings ||
         timelineRef.current !== lastDrawn.current.timeline ||
         splitRef.current !== lastDrawn.current.split ||
@@ -463,6 +511,7 @@ export default function App() {
       if (changed) {
         lastDrawn.current = {
           time,
+          outFrame,
           settings: settingsRef.current,
           timeline: timelineRef.current,
           split: splitRef.current,
@@ -487,10 +536,14 @@ export default function App() {
         levelRef.current = 0;
       }
 
-      if (isVideo && Math.abs(video.currentTime - currentTimeRef.current) > 0.02) {
+      // The playhead readout re-renders the interface, so while playing it
+      // moves at 15 Hz rather than every refresh; paused, it follows at once.
+      const moving = isVideo ? !video.paused : stillPlayingRef.current;
+      const minStep = moving ? 1 / 15 : 0.001;
+      if (isVideo && Math.abs(video.currentTime - currentTimeRef.current) > minStep) {
         currentTimeRef.current = video.currentTime;
         setCurrentTime(video.currentTime);
-      } else if (!isVideo && Math.abs(time - currentTimeRef.current) > 0.02) {
+      } else if (!isVideo && Math.abs(time - currentTimeRef.current) > minStep) {
         currentTimeRef.current = time;
         setStillTime(time);
       }
@@ -512,7 +565,8 @@ export default function App() {
     w: number;
     h: number;
     frame: number;
-  }>({ time: -1, settings: null, timeline: null, split: -1, seed: -1, renderer: null, w: 0, h: 0, frame: 0 });
+    outFrame: number;
+  }>({ time: -1, outFrame: -1, settings: null, timeline: null, split: -1, seed: -1, renderer: null, w: 0, h: 0, frame: 0 });
 
   /* ---------------- media loading ---------------- */
 
@@ -533,7 +587,8 @@ export default function App() {
   const openFile = useCallback(
     async (file: File) => {
       const kind = file.type.startsWith('image') ? 'image' : 'video';
-      await loadMedia({ url: URL.createObjectURL(file), name: file.name, kind, blob: file });
+      const path = desktop?.pathForFile?.(file) ?? undefined;
+      await loadMedia({ url: URL.createObjectURL(file), name: file.name, kind, blob: file, path });
     },
     [loadMedia],
   );
@@ -684,6 +739,12 @@ export default function App() {
       return setKeyframe(prev, key, time, current);
     });
   }, []);
+
+  // Stable callbacks for the parameter sections, which are memoised: a
+  // section re-renders only when something it shows has changed.
+  const toggleGroupOpen = useCallback((id: string) => setOpenGroups((prev) => ({ ...prev, [id]: !prev[id] })), []);
+  const resetGroupById = useCallback((id: string) => setSettings((prev) => resetGroup(prev, id)), []);
+  const addKeyframeHere = useCallback((key: string) => addKeyframeAt(key, playheadRef.current), [addKeyframeAt]);
 
   const seekTo = useCallback(
     (t: number) => {
@@ -1048,6 +1109,22 @@ export default function App() {
       const total = Math.max(1, lastOut - firstOut);
 
       renderer.resetHistory();
+      // Decode the clip front to back where the desktop shell can, rather
+      // than seeking the player for every field.
+      decodeRef.current = null;
+      if (desktop?.decodeOpen && media?.kind === 'video' && media.path) {
+        try {
+          const d = await desktop.decodeOpen({ filePath: media.path, start: exportRange.start });
+          decodeRef.current = {
+            ...d,
+            t0: Math.ceil(exportRange.start * d.fps - 1e-6) / d.fps,
+            lastK: -1,
+            lastTag: -1,
+          };
+        } catch (err) {
+          console.warn('sequential decode unavailable, seeking instead:', err);
+        }
+      }
       await prepareFrames(firstOut, exportRange.start);
       renderOnce(exportRange.start, 0, dt, true, firstOut);
       if (!hasContent(canvas)) {
@@ -1060,11 +1137,24 @@ export default function App() {
       // concealment, which have memory, see the same history every time and
       // the export is reproducible. A still has nothing to seek; the clock
       // still advances, so the camera keeps running over it.
+      // Where an export's time goes, reported at the end of a batch render.
+      const spent = { source: 0, render: 0, grab: 0, encode: 0 };
       const stepTo = async (i: number) => {
         const k = firstOut + i;
         const t = shots.outToSrc(k / fps);
+        const a = performance.now();
         await prepareFrames(k, t);
+        const b = performance.now();
         renderOnce(t, i, dt, true, k);
+        spent.source += b - a;
+        spent.render += performance.now() - b;
+      };
+      const report = (n: number) => {
+        if (!batchOutputRef.current) return;
+        const per = (v: number) => `${(v / Math.max(n, 1)).toFixed(1)} ms`;
+        console.info(
+          `timing per frame: source ${per(spent.source)} (${decodeRef.current ? 'sequential decode' : 'seeking'}) · render ${per(spent.render)} · readback ${per(spent.grab)} · waiting for the encoder ${per(spent.encode)}`,
+        );
       };
 
       // ---- desktop: stream PNGs into ffmpeg ----
@@ -1094,23 +1184,45 @@ export default function App() {
           height: outH,
           audio: wav ? await wav.arrayBuffer() : null,
           frames: total,
+          raw: { width: outW, height: outH },
         });
 
+        // Frames go to FFmpeg as raw pixels — no PNG to compress here and
+        // decompress there — and the next frame renders while the last one
+        // is still being written.
+        const grab = document.createElement('canvas');
+        grab.width = outW;
+        grab.height = outH;
+        const grabCtx = grab.getContext('2d', { willReadFrequently: true })!;
+        let inFlight: Promise<unknown> = Promise.resolve();
+        const started = performance.now();
         for (let i = 0; i < total; i++) {
           if (controller.signal.aborted) {
+            await inFlight.catch(() => undefined);
             await desktop.encodeCancel(session.id);
             setStatus('Cancelled.');
             return (outcome = { ok: false, error: 'cancelled' });
           }
           await stepTo(i);
-          const blob = await canvasToBlob(canvas);
-          await desktop.encodeFrame(session.id, await blob.arrayBuffer());
+          const g0 = performance.now();
+          grabCtx.clearRect(0, 0, outW, outH);
+          grabCtx.drawImage(canvas, 0, 0);
+          const px = grabCtx.getImageData(0, 0, outW, outH).data;
+          const g1 = performance.now();
+          await inFlight;
+          spent.grab += g1 - g0;
+          spent.encode += performance.now() - g1;
+          inFlight = desktop.encodeFrame(session.id, px.buffer);
           setProgress((i + 1) / total);
-          setStatus(`Encoding frame ${i + 1} of ${total}…`);
+          const perFrame = (performance.now() - started) / (i + 1);
+          const left = Math.round(((total - i - 1) * perFrame) / 1000);
+          setStatus(`Encoding frame ${i + 1} of ${total} · ${Math.round(1000 / perFrame * 10) / 10} fps · about ${left} s left…`);
           // Batch renders have no UI, so progress goes to the console, which
           // the main process forwards to stderr.
           if (batchOutputRef.current) console.info(`frame ${i + 1}/${total}`);
         }
+        await inFlight;
+        report(total);
 
         const result = await desktop.encodeFinish(session.id);
         setStatus(result.ok ? `Saved to ${result.outputPath}` : `Error: ${result.error}`);
@@ -1128,7 +1240,9 @@ export default function App() {
           return (outcome = { ok: false, error: 'cancelled' });
         }
         await stepTo(i);
+        const g0 = performance.now();
         const blob = await canvasToBlob(canvas);
+        spent.grab += performance.now() - g0;
         files.push({ name: `frames/${padIndex(i)}.png`, data: new Uint8Array(await blob.arrayBuffer()) });
         setProgress((i + 1) / total);
         setStatus(`Rendering frame ${i + 1} of ${total}…`);
@@ -1164,6 +1278,10 @@ export default function App() {
       setStatus(`Error: ${error}`);
       outcome = { ok: false, error };
     } finally {
+      if (decodeRef.current) {
+        void desktop?.decodeClose?.(decodeRef.current.id);
+        decodeRef.current = null;
+      }
       exportOverrideRef.current = null;
       exportingRef.current = false;
       canvas.width = savedW;
@@ -1499,13 +1617,15 @@ export default function App() {
                 settings={settings}
                 advanced={advanced}
                 open={!!openGroups[g.id]}
-                onToggleOpen={(id) => setOpenGroups((prev) => ({ ...prev, [id]: !prev[id] }))}
+                onToggleOpen={toggleGroupOpen}
                 onChange={change}
-                onReset={(id) => setSettings((prev) => resetGroup(prev, id))}
+                onReset={resetGroupById}
                 timeline={timeline}
-                time={playhead}
+                // Only a section with keyframes shows anything that depends
+                // on the playhead; the rest need not re-render as it moves.
+                time={g.params.some((p) => isAnimated(timeline, p.key)) ? playhead : 0}
                 onToggleAnimate={toggleAnimate}
-                onAddKeyframe={(key) => addKeyframeAt(key, playhead)}
+                onAddKeyframe={addKeyframeHere}
               />
             ))}
           </div>

@@ -7,7 +7,7 @@
  * started. That is the entire surface.
  */
 
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('camai', {
   isDesktop: true,
@@ -34,6 +34,19 @@ contextBridge.exposeInMainWorld('camai', {
   encodeFrame: (id, data) => ipcRenderer.invoke('encode:frame', id, data),
   encodeFinish: (id) => ipcRenderer.invoke('encode:finish', id),
   encodeCancel: (id) => ipcRenderer.invoke('encode:cancel', id),
+
+  // Sequential decoding of an opened file for exports (see decode.cjs).
+  decodeOpen: (opts) => ipcRenderer.invoke('decode:open', opts),
+  decodeFrame: (id, k) => ipcRenderer.invoke('decode:frame', id, k),
+  decodeClose: (id) => ipcRenderer.invoke('decode:close', id),
+  // Where a dropped file lives, so it can be decoded by FFmpeg.
+  pathForFile: (file) => {
+    try {
+      return webUtils.getPathForFile(file) || null;
+    } catch {
+      return null;
+    }
+  },
 
   // Headless batch mode. The renderer registers its handler and then calls
   // jobReady(); the main process waits for that before dispatching, because a

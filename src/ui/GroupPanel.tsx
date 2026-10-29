@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import { DEFAULTS, Group, ParamValue, Settings } from '../core/params';
 import { SECTION_HELP } from '../core/help';
 import { Timeline, isAnimated, indexAt } from '../core/timeline';
@@ -19,7 +19,7 @@ interface Props {
   onAddKeyframe(key: string): void;
 }
 
-export function GroupPanel({
+export const GroupPanel = memo(function GroupPanel({
   group,
   settings,
   open,
@@ -128,4 +128,4 @@ export function GroupPanel({
       )}
     </section>
   );
-}
+});

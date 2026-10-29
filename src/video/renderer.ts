@@ -266,6 +266,21 @@ export class CamRenderer {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
   }
 
+  setSourcePixels(rgba: Uint8Array, width: number, height: number, tag: number): void {
+    const gl = this.gl;
+    if (width < 1 || height < 1) return;
+    const slot = this.slots.claimPixels(tag, width, height, rgba);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, slot.handle);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
+  }
+
+  aliasSource(tag: number, existing: number): boolean {
+    return this.slots.alias(tag, existing);
+  }
+
   hasFrame(tag: number): boolean {
     return this.slots.has(tag);
   }

@@ -43,6 +43,10 @@ export interface Renderer {
   readonly sourceSize: { width: number; height: number };
   /** Upload the source picture for one moment, tagged by tagOf(capture time). */
   setSource(source: FrameSource | null, width: number, height: number, tag?: number): void;
+  /** As setSource, for raw RGBA pixels, top row first (a decoder's output). */
+  setSourcePixels(rgba: Uint8Array, width: number, height: number, tag: number): void;
+  /** Show the picture already uploaded for `existing` at moment `tag` too. */
+  aliasSource(tag: number, existing: number): boolean;
   /** Whether the source for this moment is already uploaded. */
   hasFrame(tag: number): boolean;
   render(f: RenderFrame): RenderTelemetry;

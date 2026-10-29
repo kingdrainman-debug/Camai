@@ -114,6 +114,20 @@ export class CpuRenderer {
     for (let i = 0; i < width * height * 4; i++) d[i] = s[i] * inv;
   }
 
+  setSourcePixels(rgba: Uint8Array, width: number, height: number, tag: number): void {
+    if (width < 1 || height < 1) return;
+    const slot = this.slots.claimPixels(tag, width, height, rgba);
+    const buf = ensureBuf(slot.handle, width, height);
+    this.slots.handles[slot.index] = buf;
+    const d = buf.d;
+    const inv = 1 / 255;
+    for (let i = 0; i < width * height * 4; i++) d[i] = rgba[i] * inv;
+  }
+
+  aliasSource(tag: number, existing: number): boolean {
+    return this.slots.alias(tag, existing);
+  }
+
   readQno(): Float32Array | null {
     return this.lastPlan?.codec.on && this.qno ? this.qno.slice() : null;
   }

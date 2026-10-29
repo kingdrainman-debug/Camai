@@ -11,6 +11,7 @@
  * makes the app usable from a script.
  */
 
+const decoder = require('./decode.cjs');
 const { app, BrowserWindow, dialog, ipcMain, shell, Menu } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
@@ -396,6 +397,9 @@ function registerIpc() {
   ipcMain.handle('encode:frame', encodeFrame);
   ipcMain.handle('encode:finish', encodeFinish);
   ipcMain.handle('encode:cancel', encodeCancel);
+  ipcMain.handle('decode:open', (_e, opts) => decoder.open(ffmpegPath(), opts));
+  ipcMain.handle('decode:frame', (_e, id, k) => decoder.frame(id, k));
+  ipcMain.handle('decode:close', (_e, id) => decoder.close(id));
 }
 
 /**

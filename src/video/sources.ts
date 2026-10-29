@@ -57,6 +57,42 @@ export function makeThumb(source: CanvasImageSource, out?: Float32Array): Float3
   return t;
 }
 
+/**
+ * makeThumb for raw RGBA pixels: each thumbnail cell is the mean of a grid of
+ * samples across its area, in linear light.
+ */
+export function makeThumbFromPixels(
+  rgba: Uint8Array | Uint8ClampedArray,
+  width: number,
+  height: number,
+  out?: Float32Array,
+): Float32Array {
+  const t = out ?? new Float32Array(THUMB_W * THUMB_H * 3);
+  const S = 4;
+  for (let ty = 0; ty < THUMB_H; ty++) {
+    for (let tx = 0; tx < THUMB_W; tx++) {
+      let r = 0;
+      let g = 0;
+      let b = 0;
+      for (let sy = 0; sy < S; sy++) {
+        const y = Math.min(height - 1, Math.floor(((ty + (sy + 0.5) / S) * height) / THUMB_H));
+        for (let sx = 0; sx < S; sx++) {
+          const x = Math.min(width - 1, Math.floor(((tx + (sx + 0.5) / S) * width) / THUMB_W));
+          const o = (y * width + x) * 4;
+          r += LIN[rgba[o]];
+          g += LIN[rgba[o + 1]];
+          b += LIN[rgba[o + 2]];
+        }
+      }
+      const o = (ty * THUMB_W + tx) * 3;
+      t[o] = r / (S * S);
+      t[o + 1] = g / (S * S);
+      t[o + 2] = b / (S * S);
+    }
+  }
+  return t;
+}
+
 function mirror(i: number, n: number): number {
   const p = 2 * n;
   const k = i - p * Math.floor(i / p);
@@ -105,6 +141,8 @@ export class SourceSlots<H> {
   private tags: number[];
   private versions: number[];
   private thumbs: Float32Array[];
+  /** Extra tags that show the same picture as a slot: tag -> slot index. */
+  private aliases = new Map<number, number>();
   private counter = 0;
   size = { width: 2, height: 2 };
 
@@ -115,9 +153,28 @@ export class SourceSlots<H> {
     this.thumbs = handles.map(() => new Float32Array(THUMB_W * THUMB_H * 3));
   }
 
+  private slotOf(tag: number): number {
+    const i = this.tags.indexOf(tag);
+    if (i >= 0) return i;
+    return this.aliases.get(tag) ?? -1;
+  }
+
   /** Choose the slot a new upload for `tag` goes into, and meter it. */
   claim(tag: number, width: number, height: number, source: CanvasImageSource): SourceSlot<H> {
-    let i = this.tags.indexOf(tag);
+    const i = this.take(tag, width, height);
+    makeThumb(source, this.thumbs[i]);
+    return this.slot(i);
+  }
+
+  /** As claim, for raw RGBA pixels rather than an image. */
+  claimPixels(tag: number, width: number, height: number, rgba: Uint8Array | Uint8ClampedArray): SourceSlot<H> {
+    const i = this.take(tag, width, height);
+    makeThumbFromPixels(rgba, width, height, this.thumbs[i]);
+    return this.slot(i);
+  }
+
+  private take(tag: number, width: number, height: number): number {
+    let i = this.slotOf(tag);
     if (i < 0) i = this.tags.findIndex((t) => Number.isNaN(t));
     if (i < 0) {
       i = 0;
@@ -125,20 +182,37 @@ export class SourceSlots<H> {
         if (Math.abs(this.tags[k] - tag) > Math.abs(this.tags[i] - tag)) i = k;
       }
     }
+    // Whatever else pointed at this slot now points at nothing.
+    for (const [t, k] of this.aliases) if (k === i) this.aliases.delete(t);
+    this.aliases.delete(tag);
     this.tags[i] = tag;
     this.versions[i] = ++this.counter;
     this.size = { width, height };
-    makeThumb(source, this.thumbs[i]);
-    return { handle: this.handles[i], tag, version: this.versions[i], index: i, thumb: this.thumbs[i] };
+    return i;
+  }
+
+  private slot(i: number): SourceSlot<H> {
+    return { handle: this.handles[i], tag: this.tags[i], version: this.versions[i], index: i, thumb: this.thumbs[i] };
+  }
+
+  /**
+   * `tag` shows the same picture as `existing`: no upload, no metering. Used
+   * when two fields' moments fall on one frame of the source.
+   */
+  alias(tag: number, existing: number): boolean {
+    const i = this.slotOf(existing);
+    if (i < 0) return false;
+    if (this.tags[i] !== tag) this.aliases.set(tag, i);
+    return true;
   }
 
   has(tag: number): boolean {
-    return this.tags.includes(tag);
+    return this.slotOf(tag) >= 0;
   }
 
   /** The slot holding `tag`, or the nearest one there is. */
   lookup(tag: number): SourceSlot<H> {
-    let i = this.tags.indexOf(tag);
+    let i = this.slotOf(tag);
     if (i < 0) {
       let best = -1;
       for (let k = 0; k < this.tags.length; k++) {
@@ -148,11 +222,12 @@ export class SourceSlots<H> {
       }
       i = best < 0 ? 0 : best;
     }
-    return { handle: this.handles[i], tag: this.tags[i], version: this.versions[i], index: i, thumb: this.thumbs[i] };
+    return this.slot(i);
   }
 
   clear(): void {
     this.tags = this.tags.map(() => Number.NaN);
+    this.aliases.clear();
   }
 }
 

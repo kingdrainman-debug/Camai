@@ -21,6 +21,8 @@ export interface EncodeStartOptions {
   audio?: ArrayBuffer | null;
   /** How many frames will be sent; DV pads its sound to exactly this length. */
   frames?: number;
+  /** Frames are raw RGBA of this size, top row first, rather than PNGs. */
+  raw?: { width: number; height: number };
 }
 
 export interface HeadlessJob {
@@ -58,6 +60,13 @@ export interface DesktopBridge {
   onOpenFile?(handler: (file: OpenedMedia) => void): void;
   ffmpegAvailable(): Promise<boolean>;
   encodeStart(opts: EncodeStartOptions): Promise<{ id: string; outputPath: string }>;
+  /** Decode a file front to back from `start`; frame k is start + k / fps. */
+  decodeOpen?(opts: { filePath: string; start: number }): Promise<{ id: number; width: number; height: number; fps: number }>;
+  /** Frame k as RGBA, or null past the end. */
+  decodeFrame?(id: number, k: number): Promise<Uint8Array | null>;
+  decodeClose?(id: number): Promise<void>;
+  /** The file-system path of a dropped File, where there is one. */
+  pathForFile?(file: File): string | null;
   encodeFrame(id: string, data: ArrayBuffer): Promise<boolean>;
   encodeFinish(id: string): Promise<{ ok: boolean; outputPath?: string; error?: string }>;
   encodeCancel(id: string): Promise<boolean>;

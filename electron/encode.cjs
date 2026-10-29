@@ -15,7 +15,11 @@ function rateOf(rate) {
 
 function buildArgs(opts) {
   const { format, fps, rate, quality, outputPath, audioPath, width, height } = opts;
-  const args = ['-y', '-f', 'image2pipe', '-framerate', rate || String(fps), '-i', 'pipe:0'];
+  // Frames arrive as PNGs, or (much faster: nothing to compress and
+  // decompress) as raw RGBA at a known size, top row first.
+  const args = opts.raw
+    ? ['-y', '-f', 'rawvideo', '-pix_fmt', 'rgba', '-s', `${opts.raw.width}x${opts.raw.height}`, '-framerate', rate || String(fps), '-i', 'pipe:0']
+    : ['-y', '-f', 'image2pipe', '-framerate', rate || String(fps), '-i', 'pipe:0'];
   if (audioPath) args.push('-i', audioPath);
 
   switch (format) {
