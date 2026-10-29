@@ -3,6 +3,10 @@
   "productName": "CAMAI",
   "version": "1.0.0",
   "description": "Camcorder emulation for picture and sound: MiniDV and Digital8, the operator, a small cheap lens, an interlaced CCD that smears, the automatic camera, the DV codec with its fixed bit budget, dropouts and recording breaks, the camera display and its paths, capture, deinterlacing and the 2006 upload — and the camera’s own sound.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kingdrainman-debug/Camai.git"
+  },
   "license": "MIT",
   "private": true,
   "type": "module",
