@@ -651,26 +651,36 @@ const UI_HELPERS = `
       row.querySelector('.stopwatch').click();
       await ui.sleep(200);
       const scrub = document.querySelector('input.scrub');
-      ui.setInput(scrub, 4);
-      await ui.sleep(200);
+      // Wait until the playhead has really arrived before setting the value,
+      // or the keyframe lands wherever it was on the way.
+      const arrive = async (t) => {
+        ui.setInput(scrub, t);
+        for (let k = 0; k < 50 && Math.abs(Number(scrub.value) - t) > 0.01; k++) await ui.sleep(100);
+        await ui.sleep(300);
+      };
+      await arrive(4);
       ui.setInput(row.querySelector("input[type='range']"), -2);
-      await ui.sleep(200);
+      await ui.sleep(300);
+      const exposureGroup = () => [...document.querySelectorAll('.group')].find((x) => x.querySelector('.group-title')?.textContent === 'Exposure');
+      const slider = () => Number(ui.row(exposureGroup(), 'Compensation').querySelector("input[type='range']").value);
       const diamonds = document.querySelectorAll('.track .key').length;
       const app = document.querySelector('.stage canvas');
       const p = document.createElement('canvas');
       p.width = 64;
       p.height = 48;
       const g = p.getContext('2d', { willReadFrequently: true });
-      const mean = () => {
+      const rgbMean = () => {
         g.drawImage(app, 0, 0, 64, 48);
         const d = g.getImageData(0, 0, 64, 48).data;
-        let s = 0;
-        for (let i = 0; i < d.length; i += 4) s += d[i + 1];
-        return s / (d.length / 4);
+        const m = [0, 0, 0];
+        for (let i = 0; i < d.length; i += 4) for (let c = 0; c < 3; c++) m[c] += d[i + c];
+        return m.map((v) => v / (d.length / 4));
       };
+      const mean = () => rgbMean()[1];
       const levels = [];
+      const seen = [];
       for (const t of [0, 2, 4]) {
-        ui.setInput(scrub, t);
+        await arrive(t);
         // A software-rendered frame can take longer than a poll, so one
         // unchanged reading is not settled: wait for four in a row.
         await ui.sleep(1500);
@@ -683,17 +693,23 @@ const UI_HELPERS = `
           last = m;
         }
         levels.push(mean());
+        seen.push({ t, slider: slider(), rgb: rgbMean().map((v) => Math.round(v)) });
       }
       const exposureMode = ui.row(await ui.section('Exposure'), 'Mode').querySelector('select').value;
-      return { diamonds, levels, scrubMax: scrub.max, exposureMode, duration: document.querySelector('video')?.duration ?? null };
+      return { diamonds, levels, seen, scrubMax: scrub.max, exposureMode };
     });
     if (r.diamonds !== 2) fail(stage, `expected 2 keyframe markers, drew ${r.diamonds}`);
+    // The value itself, as the interface shows it at each time.
+    const [s0, s2, s4] = r.seen.map((x) => x.slider);
+    if (!(Math.abs(s0) < 0.05 && Math.abs(s4 + 2) < 0.05 && s2 < -0.2 && s2 > -1.8)) {
+      fail(stage, `the compensation reads ${s0} → ${s2} → ${s4} at 0, 2 and 4 s; expected 0, between, −2`);
+    }
     const [a, mid, b] = r.levels;
     if (a - b < 30) fail(stage, `two stops less exposure barely changed the render (${a.toFixed(1)} → ${b.toFixed(1)})`);
     if (mid < Math.min(a, b) + 3 || mid > Math.max(a, b) - 3) {
-      fail(stage, `midpoint ${mid.toFixed(1)} is not between ${a.toFixed(1)} and ${b.toFixed(1)} — stepping, not easing (scrub max ${r.scrubMax}, exposure ${r.exposureMode})`);
+      fail(stage, `midpoint ${mid.toFixed(1)} is not between ${a.toFixed(1)} and ${b.toFixed(1)} — stepping, not easing (${JSON.stringify(r.seen)}, exposure ${r.exposureMode})`);
     }
-    note(stage, `${r.diamonds} markers · brightness ${r.levels.map((v) => v.toFixed(0)).join(' → ')}`);
+    note(stage, `${r.diamonds} markers · compensation ${r.seen.map((x) => x.slider.toFixed(2)).join(' → ')} · brightness ${r.levels.map((v) => v.toFixed(0)).join(' → ')}`);
   } catch (err) {
     fail(stage, String(err));
   }
