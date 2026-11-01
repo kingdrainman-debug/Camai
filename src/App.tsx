@@ -471,10 +471,20 @@ export default function App() {
         time = video.currentTime;
         // A recording break skips part of the world: the camera was not
         // recording, so the preview jumps the source past it as the tape does.
+        //
+        // The jump lands a few milliseconds inside the next shot. A media
+        // element keeps time to the microsecond, so a seek to the exact first
+        // moment of the shot reads back a hair before it, still in the
+        // stretch that was skipped, and the preview would seek there again on
+        // every frame and never move on. Nor is a jump repeated while the
+        // last one is still under way.
         const at = shotsFor(activeSettingsRef.current, seedRef.current).srcToOut(time);
-        if (!at.recorded && !video.paused && at.resume < (video.duration || Infinity)) {
-          video.currentTime = at.resume;
-          time = at.resume;
+        if (!at.recorded && !video.paused && !video.seeking) {
+          const target = at.resume + 0.005;
+          if (target < (video.duration || Infinity)) {
+            video.currentTime = target;
+            time = target;
+          }
         }
       } else {
         // A still runs on a virtual transport so that what you scrub through

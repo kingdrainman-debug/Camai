@@ -64,8 +64,8 @@ const MIME = {
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', 'http://localhost');
   let path = normalize(decodeURIComponent(url.pathname));
-  if (path === '/fixture.webm') {
-    const body = await readFile(join(fixtures, 'motion.webm'));
+  if (path === '/fixture.webm' || path === '/long.webm') {
+    const body = await readFile(join(fixtures, path === '/long.webm' ? 'long.webm' : 'motion.webm'));
     res.writeHead(200, { 'content-type': 'video/webm', 'content-length': body.length });
     res.end(body);
     return;
@@ -490,6 +490,67 @@ async function settledStats(page, { minMean = 20, tolerance = 2.5, timeout = 300
   const bad = r.toasts.filter((t) => /audio/i.test(t));
   if (bad.length) fail('reopen', `opening another clip broke the sound: ${bad[0]}`);
   else note('reopen', 'three clips opened into the same player in turn, each played with its sound');
+}
+
+/* ---- 3c. playback runs on through a recording break ----
+ * The preview jumps the source past the stretch a break skipped. The
+ * flagship's first break is at 4 s; playback must carry on past it. */
+{
+  const { page } = await openPage();
+  try {
+    await page.selectOption('.topbar-actions select', 'palmcorder-2002');
+    const r = await page.evaluate(async () => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const blob = await (await fetch('/long.webm')).blob();
+      const dt = new DataTransfer();
+      dt.items.add(new File([blob], 'long.webm', { type: 'video/webm' }));
+      window.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true }));
+      let v = null;
+      for (let k = 0; k < 200 && !v; k++) {
+        const e = document.querySelector('video');
+        if (e && e.readyState >= 2 && e.duration > 6) v = e;
+        else await sleep(100);
+      }
+      if (!v) return { error: 'the clip never loaded' };
+      document.querySelector('.transport .play')?.click();
+      const times = [];
+      const t0 = performance.now();
+      while (performance.now() - t0 < 25000) {
+        await sleep(500);
+        times.push(Number(v.currentTime.toFixed(2)));
+        if (v.currentTime > 5.5 || v.ended) break;
+      }
+      v.pause();
+      return { times, end: v.currentTime, ended: v.ended, paused: v.paused };
+    });
+    if (r.error) fail('breaks', r.error);
+    else if (!(r.end > 5.5 || r.ended)) fail('breaks', `playback stopped at ${r.end.toFixed(2)} s, at the recording break (${r.times.join(', ')})`);
+    else note('breaks', `playback ran on through the break at 4 s to ${r.end.toFixed(1)} s`);
+    // Where the preview seeks to, read back as a media element keeps time
+    // (whole microseconds), must count as recorded, or on a machine that
+    // looks at the clock between the seek and playback resuming the preview
+    // seeks there again on every frame and never gets past the break.
+    // App.tsx seeks 5 ms past the shot's first moment.
+    const events = await import(pathToFileURL(join(here, '..', 'public', 'worklets', 'camai-events.js')).href);
+    let checked = 0;
+    let stuck = 0;
+    for (let seed = 0; seed < 200; seed++) {
+      for (const rate of [2, 3, 12, 20]) {
+        const shots = new events.Shots(seed, { enabled: true, rate, skip: 0.6, gap: 10, seamless: true });
+        shots.ensure(120);
+        for (const shot of shots.list.slice(1)) {
+          if (shot.src0 > 120) break;
+          checked++;
+          if (!shots.srcToOut(Math.floor((shot.src0 + 0.005) * 1e6) / 1e6).recorded) stuck++;
+        }
+      }
+    }
+    if (stuck) fail('breaks', `${stuck} of ${checked} break seeks land back in the skipped stretch`);
+    else note('breaks', `all ${checked} break seeks land inside the next shot, read back to the microsecond`);
+  } catch (err) {
+    fail('breaks', String(err));
+  }
+  await page.close();
 }
 
 /* ================================================================== *
