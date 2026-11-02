@@ -195,6 +195,27 @@ export class Shots {
   }
 }
 
+/**
+ * Whether a playing preview should skip the source past a recording break,
+ * and where to. It skips each break once: where the player lands is not
+ * read back to decide again, because players report the time of the frame
+ * they landed on, which can fall a frame before the time asked for, back
+ * in the stretch that was skipped. Asking again there would seek forever.
+ *
+ * `last` is the index of the shot last skipped into (-1 for none); the
+ * result carries the new value to keep.
+ */
+export function breakSkip(shots, t, last) {
+  const at = shots.srcToOut(t);
+  // Playing on in the shot skipped into keeps the memory; anywhere else (a
+  // loop back to the start, a scrub) clears it, so that break skips again.
+  if (at.recorded) return { target: null, last: at.index === last ? last : -1 };
+  if (at.index === last) return { target: null, last };
+  // A frame and a bit inside the next shot, so even a player that snaps to
+  // the frame before the target is past its first moment.
+  return { target: at.resume + 0.05, last: at.index };
+}
+
 /* ------------------------------------------------------------------ *
  * Tape errors
  * ------------------------------------------------------------------ */

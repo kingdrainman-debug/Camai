@@ -37,6 +37,7 @@ import { canvasToBlob, padIndex, seek, zipFrames } from './export/frames';
 import { desktop, isBatchMode, saveBlob } from './platform/desktop';
 import { frameAspect, outputSize, upscaleFactor } from './core/output';
 import { frameState, neededTaps, outFrameAt, rates, shotsFor, systemOf } from './cam/clock';
+import { breakSkip } from '../public/worklets/camai-events.js';
 import { aimFromTimeline } from './cam/plan';
 import { num } from './core/params';
 import { Guide, shouldShowOnStartup } from './ui/Guide';
@@ -470,20 +471,14 @@ export default function App() {
       if (isVideo) {
         time = video.currentTime;
         // A recording break skips part of the world: the camera was not
-        // recording, so the preview jumps the source past it as the tape does.
-        //
-        // The jump lands a few milliseconds inside the next shot. A media
-        // element keeps time to the microsecond, so a seek to the exact first
-        // moment of the shot reads back a hair before it, still in the
-        // stretch that was skipped, and the preview would seek there again on
-        // every frame and never move on. Nor is a jump repeated while the
-        // last one is still under way.
-        const at = shotsFor(activeSettingsRef.current, seedRef.current).srcToOut(time);
-        if (!at.recorded && !video.paused && !video.seeking) {
-          const target = at.resume + 0.005;
-          if (target < (video.duration || Infinity)) {
-            video.currentTime = target;
-            time = target;
+        // recording, so the preview jumps the source past it as the tape
+        // does — once per break (see breakSkip for why it never asks again).
+        if (!video.paused && !video.seeking) {
+          const skip = breakSkip(shotsFor(activeSettingsRef.current, seedRef.current), time, skippedRef.current);
+          skippedRef.current = skip.last;
+          if (skip.target !== null && skip.target < (video.duration || Infinity)) {
+            video.currentTime = skip.target;
+            time = skip.target;
           }
         }
       } else {
@@ -565,6 +560,8 @@ export default function App() {
 
   const currentTimeRef = useRef(0);
   /** What the last drawn frame was drawn from, so an unchanged one is not redrawn. */
+  /** The shot the preview last skipped into at a recording break, or −1. */
+  const skippedRef = useRef(-1);
   const lastDrawn = useRef<{
     time: number;
     settings: Settings | null;
@@ -764,6 +761,7 @@ export default function App() {
         currentTimeRef.current = clamped;
         setStillTime(clamped);
       } else if (videoRef.current) {
+        skippedRef.current = -1;
         videoRef.current.currentTime = clamped;
         setCurrentTime(clamped);
         rendererRef.current?.resetHistory();

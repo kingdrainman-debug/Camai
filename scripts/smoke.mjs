@@ -526,27 +526,43 @@ async function settledStats(page, { minMean = 20, tolerance = 2.5, timeout = 300
     if (r.error) fail('breaks', r.error);
     else if (!(r.end > 5.5 || r.ended)) fail('breaks', `playback stopped at ${r.end.toFixed(2)} s, at the recording break (${r.times.join(', ')})`);
     else note('breaks', `playback ran on through the break at 4 s to ${r.end.toFixed(1)} s`);
-    // Where the preview seeks to, read back as a media element keeps time
-    // (whole microseconds), must count as recorded, or on a machine that
-    // looks at the clock between the seek and playback resuming the preview
-    // seeks there again on every frame and never gets past the break.
-    // App.tsx seeks 5 ms past the shot's first moment.
+    // The decision itself, against a player that behaves like a real one:
+    // it reports the start of the frame it shows (so a seek can read back a
+    // frame before the time asked for, inside the skipped stretch), takes a
+    // few refreshes to finish a seek, and is looked at 60 times a second.
+    // A preview that re-decided from what the player reports would seek
+    // forever at the first break; it must play on through every one.
     const events = await import(pathToFileURL(join(here, '..', 'public', 'worklets', 'camai-events.js')).href);
-    let checked = 0;
+    const play = (shots, fps) => {
+      let t = 0;
+      let seeking = 0;
+      let last = -1;
+      for (let tick = 0; tick < 60 * 300 && t < 40; tick++) {
+        if (seeking > 0) {
+          seeking--;
+          continue;
+        }
+        const r = events.breakSkip(shots, Math.floor(t * fps + 1e-9) / fps, last);
+        last = r.last;
+        if (r.target !== null) {
+          t = r.target;
+          seeking = 3;
+        } else t += 1 / 60;
+      }
+      return t >= 40;
+    };
+    let runs = 0;
     let stuck = 0;
-    for (let seed = 0; seed < 200; seed++) {
-      for (const rate of [2, 3, 12, 20]) {
-        const shots = new events.Shots(seed, { enabled: true, rate, skip: 0.6, gap: 10, seamless: true });
-        shots.ensure(120);
-        for (const shot of shots.list.slice(1)) {
-          if (shot.src0 > 120) break;
-          checked++;
-          if (!shots.srcToOut(Math.floor((shot.src0 + 0.005) * 1e6) / 1e6).recorded) stuck++;
+    for (let seed = 0; seed < 100; seed++) {
+      for (const rate of [2, 6, 20]) {
+        for (const fps of [23.976, 25, 29.97, 30, 59.94]) {
+          runs++;
+          if (!play(new events.Shots(seed, { enabled: true, rate, skip: 0.6, gap: 10, seamless: true }), fps)) stuck++;
         }
       }
     }
-    if (stuck) fail('breaks', `${stuck} of ${checked} break seeks land back in the skipped stretch`);
-    else note('breaks', `all ${checked} break seeks land inside the next shot, read back to the microsecond`);
+    if (stuck) fail('breaks', `a frame-snapping player stuck at a break in ${stuck} of ${runs} runs`);
+    else note('breaks', `a frame-snapping player looked at 60 times a second plays through every break (${runs} runs, 24–60 fps)`);
   } catch (err) {
     fail('breaks', String(err));
   }

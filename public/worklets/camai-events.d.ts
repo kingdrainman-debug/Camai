@@ -42,6 +42,8 @@ export interface Dropout {
   share: number;
 }
 
+export function breakSkip(shots: Shots, t: number, last: number): { target: number | null; last: number };
+
 export function dropoutAt(n: number, seed: number, ratePerMin: number, fps: number, size: number, tracks: number): Dropout | null;
 export function clogAt(n: number, seed: number, ratePerMin: number, fps: number, lengthSec: number): number;
 export function bumpTicks(t: number, seed: number, ratePerMin: number, span?: number): number[];
